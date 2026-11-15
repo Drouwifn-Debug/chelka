@@ -1,0 +1,627 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dynamic Island</title>
+<style>
+  :root {
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --ease-inout: cubic-bezier(0.77, 0, 0.175, 1);
+    --page: #0a0b0e;
+    --ink: #f5f5f7;
+    --muted: rgba(245, 245, 247, 0.55);
+    --chip-bg: rgba(255, 255, 255, 0.07);
+    --chip-border: rgba(255, 255, 255, 0.09);
+    --green: #30d158;
+    --orange: #ff9f0a;
+    --red: #ff453a;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: var(--page);
+    color: var(--ink);
+    font: 100%/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 22px;
+    padding: 34px 16px 44px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---------- header ---------- */
+  .top { text-align: center; max-width: 480px; }
+  .top h1 { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+  .top p { font-size: 13px; color: var(--muted); margin-top: 3px; }
+
+  /* ---------- phone ---------- */
+  .phone {
+    background: #17181c;
+    padding: 10px;
+    border-radius: 56px;
+    box-shadow:
+      0 30px 80px rgba(0, 0, 0, 0.55),
+      inset 0 0 0 1.5px rgba(255, 255, 255, 0.06);
+  }
+  .stage {
+    position: relative;
+    width: 390px;
+    height: 760px;
+    border-radius: 46px;
+    overflow: hidden;
+    background:
+      radial-gradient(120% 85% at 85% 6%, rgba(63, 86, 240, 0.5), transparent 55%),
+      radial-gradient(95% 75% at 10% 28%, rgba(14, 118, 108, 0.38), transparent 58%),
+      radial-gradient(85% 65% at 80% 80%, rgba(148, 38, 122, 0.3), transparent 60%),
+      linear-gradient(180deg, #0a0f26, #05060c 72%);
+  }
+  .stage::after { /* subtle glass glare */
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(115deg, rgba(255,255,255,0.05) 0%, transparent 22%);
+    pointer-events: none;
+  }
+
+  /* ---------- status bar ---------- */
+  .statusbar {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 30px 0 36px;
+    transition: opacity 180ms var(--ease-out);
+    z-index: 5;
+  }
+  .stage.exp .statusbar { opacity: 0; }
+  #clock { font-size: 15px; font-weight: 600; }
+  .sright { display: flex; align-items: center; gap: 7px; }
+  .sig { display: flex; align-items: flex-end; gap: 2px; }
+  .sig i { width: 3px; background: #fff; border-radius: 1px; display: block; }
+  .sig i:nth-child(1) { height: 5px; } .sig i:nth-child(2) { height: 7px; }
+  .sig i:nth-child(3) { height: 9px; } .sig i:nth-child(4) { height: 11px; opacity: .4; }
+  .batt { width: 25px; height: 12px; border: 1px solid rgba(255,255,255,.45); border-radius: 4px; position: relative; }
+  .batt i { position: absolute; top: 1.5px; bottom: 1.5px; left: 1.5px; width: 68%; background: #fff; border-radius: 2px; }
+  .batt::after { content: ""; position: absolute; right: -3.5px; top: 3.5px; width: 2px; height: 5px; background: rgba(255,255,255,.45); border-radius: 0 2px 2px 0; }
+
+  /* ---------- island ---------- */
+  .island {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #000;
+    border: none;
+    cursor: pointer;
+    overflow: hidden;
+    z-index: 10;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+    transition: box-shadow 220ms var(--ease-out);
+    padding: 0;
+    font: inherit;
+    color: inherit;
+  }
+  .stage.exp .island { box-shadow: 0 12px 34px rgba(0, 0, 0, 0.5); }
+  .island:focus-visible { box-shadow: 0 0 0 3px rgba(255,255,255,0.85), 0 2px 10px rgba(0,0,0,.4); }
+  .stage.exp .island:focus-visible { box-shadow: 0 0 0 3px rgba(255,255,255,0.85), 0 12px 34px rgba(0,0,0,.5); }
+
+  .layer {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    transition: opacity 150ms var(--ease-out);
+  }
+  .layer.on { opacity: 1; }
+
+  /* compact blocks */
+  .c-block {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 9px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 130ms var(--ease-out);
+  }
+  .c-block.on { opacity: 1; transition-delay: 60ms; }
+  .c-left, .c-right { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .c-txt { font-size: 13px; font-weight: 600; letter-spacing: 0.01em; white-space: nowrap; }
+  .c-ico { display: flex; }
+  .c-ico svg { width: 17px; height: 17px; }
+
+  .art { display: block; width: 26px; height: 26px; border-radius: 7px; position: relative; overflow: hidden; flex: none; }
+  .art::after { content: ""; position: absolute; inset: 0; background: linear-gradient(160deg, rgba(255,255,255,.28), transparent 45%); }
+  .g1 { background: linear-gradient(135deg, #4b4ee8, #a43fd6); }
+  .g2 { background: linear-gradient(135deg, #e0483f, #f2a33c); }
+  .g3 { background: linear-gradient(135deg, #0f8f7d, #2bb1a3); }
+
+  .wave { display: flex; align-items: flex-end; gap: 2.5px; height: 15px; }
+  .wave i { width: 3px; height: 100%; border-radius: 2px; background: rgba(255,255,255,.92); transform-origin: bottom; animation: eq 0.9s ease-in-out infinite alternate; }
+  .wave i:nth-child(1) { animation-duration: .74s; }
+  .wave i:nth-child(2) { animation-duration: .95s; animation-delay: .12s; }
+  .wave i:nth-child(3) { animation-duration: .68s; animation-delay: .2s; }
+  .wave i:nth-child(4) { animation-duration: .88s; animation-delay: .05s; }
+  .wave i:nth-child(5) { animation-duration: .78s; animation-delay: .26s; }
+  .wave.paused i { animation-play-state: paused; transform: scaleY(.45); transition: transform 200ms var(--ease-out); }
+  @keyframes eq { from { transform: scaleY(0.3); } to { transform: scaleY(1); } }
+
+  .i-green { color: var(--green); } .i-orange { color: var(--orange); } .i-white { color: #fff; }
+
+  /* face id compact */
+  .fi-check { display: none; }
+  .c-block.fi-done .fi-prompt { display: none; }
+  .c-block.fi-done .fi-check { display: flex; }
+
+  /* ---------- expanded cards ---------- */
+  .x-block {
+    position: absolute;
+    inset: 0;
+    padding: 15px 16px 14px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 160ms var(--ease-out);
+    display: flex;
+    flex-direction: column;
+  }
+  .x-block.on { opacity: 1; pointer-events: auto; transition-delay: 90ms; }
+  .x-close {
+    position: absolute;
+    top: 10px; right: 10px;
+    width: 26px; height: 26px;
+    border: none; border-radius: 50%;
+    background: rgba(255,255,255,.12);
+    color: rgba(255,255,255,.75);
+    display: grid; place-items: center;
+    cursor: pointer;
+    padding: 0;
+  }
+  .x-close svg { width: 12px; height: 12px; }
+  .x-close:active { transform: scale(0.92); }
+
+  /* music expanded */
+  .x-head { display: flex; align-items: center; gap: 12px; padding-right: 26px; }
+  .art-lg { width: 54px; height: 54px; border-radius: 13px; }
+  .x-title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+  .x-sub { font-size: 12px; color: rgba(255,255,255,.55); margin-top: 1px; }
+  .x-progress { margin-top: 12px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.16); overflow: hidden; }
+  .x-progress i { display: block; height: 100%; width: 52%; background: rgba(255,255,255,.9); border-radius: 2px; }
+  .x-times { display: flex; justify-content: space-between; font-size: 10.5px; color: rgba(255,255,255,.45); margin-top: 5px; }
+  .x-controls { margin-top: 9px; display: flex; align-items: center; justify-content: center; gap: 34px; }
+  .x-btn { background: none; border: none; color: #fff; cursor: pointer; display: flex; padding: 4px; border-radius: 10px; }
+  .x-btn svg { width: 22px; height: 22px; }
+  .x-btn:active { transform: scale(0.9); }
+  .x-btn.play svg { width: 26px; height: 26px; }
+
+  /* timer / charge rings */
+  .x-ringwrap { display: flex; align-items: center; justify-content: center; flex: 1; position: relative; }
+  .x-ring { position: absolute; inset: 0; margin: auto; }
+  .x-ringsvg { width: 96px; height: 96px; transform: rotate(-90deg); }
+  .x-ringsvg .bg { stroke: rgba(255,255,255,.14); }
+  .x-big { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; }
+  .x-btnrow { display: flex; justify-content: center; gap: 10px; }
+  .pillbtn {
+    border: none; cursor: pointer;
+    background: rgba(255,255,255,.14);
+    color: #fff;
+    font: 600 12.5px/1 inherit;
+    padding: 9px 20px;
+    border-radius: 999px;
+  }
+  .pillbtn:active { transform: scale(0.96); }
+  .pillbtn.stop { background: rgba(255, 69, 58, 0.28); color: #ffb3ad; }
+  .x-note { text-align: center; font-size: 12px; color: rgba(255,255,255,.55); margin-top: 10px; }
+
+  /* call expanded */
+  .x-call { display: flex; align-items: center; gap: 12px; padding-right: 26px; flex: 1; }
+  .ava { width: 46px; height: 46px; border-radius: 50%; flex: none; display: grid; place-items: center; font-weight: 600; font-size: 18px; color: #fff; background: linear-gradient(135deg, #2b6cb0, #0ea5a4); }
+  .x-callbtns { display: flex; justify-content: center; gap: 14px; padding-bottom: 2px; }
+  .cbtn { width: 40px; height: 40px; border-radius: 50%; border: none; display: grid; place-items: center; cursor: pointer; background: rgba(255,255,255,.14); color: #fff; }
+  .cbtn svg { width: 18px; height: 18px; }
+  .cbtn.end { background: var(--red); color: #fff; transform: rotate(135deg); }
+  .cbtn:active { transform: scale(0.92); }
+  .cbtn.end:active { transform: rotate(135deg) scale(0.92); }
+  .cbtn.muted { background: #fff; color: #000; }
+
+  /* hint */
+  .hint {
+    position: absolute;
+    bottom: 26px; left: 0; right: 0;
+    text-align: center;
+    font-size: 12px;
+    color: rgba(255,255,255,.55);
+    pointer-events: none;
+    z-index: 4;
+  }
+
+  /* ---------- chips ---------- */
+  .chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 560px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    border: 1px solid var(--chip-border);
+    background: var(--chip-bg);
+    color: rgba(245,245,247,.85);
+    font: 500 13px/1 inherit;
+    padding: 9px 15px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background 140ms var(--ease-out), border-color 140ms var(--ease-out), color 140ms var(--ease-out);
+  }
+  .chip svg { width: 14px; height: 14px; }
+  @media (hover: hover) and (pointer: fine) {
+    .chip:hover { background: rgba(255,255,255,.11); }
+  }
+  .chip:active { transform: scale(0.97); }
+  .chip[aria-pressed="true"] { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.3); color: #fff; }
+  .chip:focus-visible, .x-btn:focus-visible, .pillbtn:focus-visible, .cbtn:focus-visible, .x-close:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+  /* ---------- responsive ---------- */
+  @media (max-width: 560px) {
+    body { padding: 18px 10px 20px; gap: 16px; }
+    .phone { padding: 6px; border-radius: 40px; width: 100%; }
+    .stage { width: 100%; height: min(72vh, 700px); border-radius: 34px; }
+    .top p { display: none; }
+  }
+
+  /* ---------- reduced motion ---------- */
+  @media (prefers-reduced-motion: reduce) {
+    .wave i { animation: none; transform: scaleY(0.55); }
+    .layer, .c-block, .x-block { transition-duration: 120ms; }
+    .statusbar { transition: none; }
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <h1>Dynamic Island</h1>
+  <p>Живые активности на пружинах, как в iOS. Нажми на островок — раскроется, выбери активность снизу.</p>
+</header>
+
+<div class="phone">
+  <div class="stage" id="stage">
+    <div class="statusbar">
+      <span id="clock">9:41</span>
+      <span class="sright">
+        <span class="sig"><i></i><i></i><i></i><i></i></span>
+        <svg width="15" height="11" viewBox="0 0 16 12" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round"><path d="M1.5 4.2c3.8-3.4 9.2-3.4 13 0"/><path d="M4 7c2.4-2.1 5.6-2.1 8 0"/><path d="M6.6 9.7c.9-.7 1.9-.7 2.8 0"/></svg>
+        <span class="batt"><i></i></span>
+      </span>
+    </div>
+
+    <button class="island" id="island" aria-expanded="false" aria-label="Динамический островок">
+      <!-- compact layer -->
+      <div class="layer" id="compact">
+        <div class="c-block" data-act="music">
+          <span class="c-left"><span class="art g1" id="cArt"></span></span>
+          <span class="c-right"><span class="wave" id="wave"><i></i><i></i><i></i><i></i><i></i></span></span>
+        </div>
+        <div class="c-block" data-act="timer">
+          <span class="c-left c-ico i-orange"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 1.5"/><path d="M9.5 2h5"/></svg></span>
+          <span class="c-right c-txt" id="cTimer">12:34</span>
+        </div>
+        <div class="c-block" data-act="call">
+          <span class="c-left c-ico i-green"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.6 10.8c1.4 2.8 3.8 5.2 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.3 1.2.4 2.4.6 3.7.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.7 21 3 13.3 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.7.1.3 0 .7-.3 1l-2.2 2.1z"/></svg></span>
+          <span class="c-right c-txt" id="cCall">0:47</span>
+        </div>
+        <div class="c-block" data-act="charge">
+          <span class="c-left c-ico i-green"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4.9 13.2h5.2L10 22l8.2-11.6h-5.3L13 2z"/></svg></span>
+          <span class="c-right c-txt" id="cCharge">84%</span>
+        </div>
+        <div class="c-block" data-act="faceid">
+          <span class="c-left fi-prompt c-ico i-white"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3H6a3 3 0 0 0-3 3v2M16 3h2a3 3 0 0 1 3 3v2M8 21H6a3 3 0 0 1-3-3v-2M16 21h2a3 3 0 0 0 3-3v-2"/><path d="M9 9.5v1M15 9.5v1M9.5 14.5c1.5 1.3 3.5 1.3 5 0"/></svg></span>
+          <span class="fi-prompt c-txt">Face ID</span>
+          <span class="fi-check c-ico i-green" style="margin:auto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5 10 18 19.5 7"/></svg></span>
+        </div>
+      </div>
+
+      <!-- expanded layer -->
+      <div class="layer" id="expanded">
+        <div class="x-block" data-act="music">
+          <button class="x-close" data-end aria-label="Закрыть"><svg viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 2l8 8M10 2l-8 8"/></svg></button>
+          <div class="x-head">
+            <span class="art art-lg g1" id="xArt"></span>
+            <div><div class="x-title" id="xTitle">Midnight City</div><div class="x-sub" id="xSub">M83</div></div>
+          </div>
+          <div class="x-progress"><i id="xProg"></i></div>
+          <div class="x-times"><span id="xCur">1:47</span><span id="xRem">-1:39</span></div>
+          <div class="x-controls">
+            <button class="x-btn" id="prevBtn" aria-label="Предыдущий трек"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h2.4v14H7zM19 5v14l-9.5-7z"/></svg></button>
+            <button class="x-btn play" id="playBtn" aria-label="Пауза"><svg viewBox="0 0 24 24" fill="currentColor" id="playIco"><path d="M8 5h3v14H8zM13 5h3v14h-3z"/></svg></button>
+            <button class="x-btn" id="nextBtn" aria-label="Следующий трек"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M14.6 5H17v14h-2.4zM5 5v14l9.5-7z"/></svg></button>
+          </div>
+        </div>
+
+        <div class="x-block" data-act="timer">
+          <button class="x-close" data-end aria-label="Закрыть"><svg viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 2l8 8M10 2l-8 8"/></svg></button>
+          <div class="x-ringwrap">
+            <svg class="x-ringsvg" viewBox="0 0 96 96"><circle class="bg" cx="48" cy="48" r="44" fill="none" stroke-width="7"/><circle id="ringT" cx="48" cy="48" r="44" fill="none" stroke="#ff9f0a" stroke-width="7" stroke-linecap="round" stroke-dasharray="276.5" stroke-dashoffset="0"/></svg>
+            <span class="x-big" id="xTimer">12:34</span>
+          </div>
+          <div class="x-btnrow">
+            <button class="pillbtn" id="pauseBtn">Пауза</button>
+            <button class="pillbtn stop" data-end>Стоп</button>
+          </div>
+        </div>
+
+        <div class="x-block" data-act="call">
+          <button class="x-close" data-end aria-label="Закрыть"><svg viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 2l8 8M10 2l-8 8"/></svg></button>
+          <div class="x-call">
+            <span class="ava">А</span>
+            <div><div class="x-title">Аня</div><div class="x-sub" id="xCall">0:47</div></div>
+          </div>
+          <div class="x-callbtns">
+            <button class="cbtn" id="muteBtn" aria-label="Выключить звук"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M11 5 6.5 9H3v6h3.5L11 19V5z"/><path id="muteArc" d="M15.5 8.5a5 5 0 0 1 0 7" style="display:none"/><path d="M15 9.5l5 5M20 9.5l-5 5" id="muteX"/></svg></button>
+            <button class="cbtn end" data-end aria-label="Завершить звонок"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.6 10.8c1.4 2.8 3.8 5.2 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.3 1.2.4 2.4.6 3.7.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.7 21 3 13.3 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.7.1.3 0 .7-.3 1l-2.2 2.1z"/></svg></button>
+          </div>
+        </div>
+
+        <div class="x-block" data-act="charge">
+          <button class="x-close" data-end aria-label="Закрыть"><svg viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 2l8 8M10 2l-8 8"/></svg></button>
+          <div class="x-ringwrap" style="flex:0 0 96px">
+            <svg class="x-ringsvg" viewBox="0 0 96 96"><circle class="bg" cx="48" cy="48" r="44" fill="none" stroke-width="7"/><circle id="ringC" cx="48" cy="48" r="44" fill="none" stroke="#30d158" stroke-width="7" stroke-linecap="round" stroke-dasharray="276.5" stroke-dashoffset="0"/></svg>
+            <span class="x-big" style="position:absolute">84%</span>
+          </div>
+          <div class="x-note">Быстрая зарядка · полный заряд через 40 мин</div>
+        </div>
+      </div>
+    </button>
+
+    <div class="hint" id="hint">Нажми на островок, чтобы раскрыть</div>
+  </div>
+</div>
+
+<div class="chips" role="group" aria-label="Активности">
+  <button class="chip" data-act="music" aria-pressed="false"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 19a3 3 0 1 1-2-2.8V6l11-2.5V15a3 3 0 1 1-2-2.8V7.2L9 9.4V19z" transform="translate(1 -1)"/></svg>Музыка</button>
+  <button class="chip" data-act="timer" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 1.5"/><path d="M9.5 2h5"/></svg>Таймер</button>
+  <button class="chip" data-act="call" aria-pressed="false"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.6 10.8c1.4 2.8 3.8 5.2 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.3 1.2.4 2.4.6 3.7.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.7 21 3 13.3 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.7.1.3 0 .7-.3 1l-2.2 2.1z"/></svg>Звонок</button>
+  <button class="chip" data-act="charge" aria-pressed="false"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4.9 13.2h5.2L10 22l8.2-11.6h-5.3L13 2z"/></svg>Зарядка</button>
+  <button class="chip" data-act="faceid" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3H6a3 3 0 0 0-3 3v2M16 3h2a3 3 0 0 1 3 3v2M8 21H6a3 3 0 0 1-3-3v-2M16 21h2a3 3 0 0 0 3-3v-2"/><path d="M9 9.5v1M15 9.5v1M9.5 14.5c1.5 1.3 3.5 1.3 5 0"/></svg>Face ID</button>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (s) { return document.querySelector(s); };
+  var $$ = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
+  var island = $("#island"), stage = $("#stage"), hint = $("#hint");
+  var compactL = $("#compact"), expandedL = $("#expanded");
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---------- sizes ---------- */
+  var IDLE = { w: 126, h: 37, r: 18.5 };
+  var COMPACT = { music: 252, timer: 200, call: 192, charge: 172, faceid: 172 };
+  var EXP = {
+    music:  { w: 358, h: 176, r: 40 },
+    timer:  { w: 358, h: 212, r: 40 },
+    call:   { w: 358, h: 164, r: 40 },
+    charge: { w: 358, h: 152, r: 40 }
+  };
+
+  /* ---------- spring engine (damping ζ + response τ, interruptible) ---------- */
+  var springs = { w: { x: IDLE.w, v: 0, t: IDLE.w, z: 1, w0: 0 },
+                  h: { x: IDLE.h, v: 0, t: IDLE.h, z: 1, w0: 0 },
+                  r: { x: IDLE.r, v: 0, t: IDLE.r, z: 1, w0: 0 } };
+  var raf = null, last = 0;
+
+  function springTo(targets, z, resp) {
+    for (var k in targets) {
+      var s = springs[k];
+      if (s.x !== targets[k]) { s.t = targets[k]; s.z = z; s.w0 = 2 * Math.PI / resp; }
+    }
+    if (reduce) { for (var k2 in targets) { springs[k2].x = springs[k2].t = targets[k2]; springs[k2].v = 0; } apply(); return; }
+    if (!raf) { last = performance.now(); raf = requestAnimationFrame(tick); }
+  }
+  function tick(ts) {
+    var dt = Math.min((ts - last) / 1000, 1 / 30); last = ts;
+    var active = false;
+    for (var k in springs) {
+      var s = springs[k];
+      if (s.x === s.t && s.v === 0) continue;
+      var a = -2 * s.z * s.w0 * s.v - s.w0 * s.w0 * (s.x - s.t);
+      s.v += a * dt; s.x += s.v * dt;
+      if (Math.abs(s.x - s.t) < 0.08 && Math.abs(s.v) < 2) { s.x = s.t; s.v = 0; } else { active = true; }
+    }
+    apply();
+    raf = active ? requestAnimationFrame(tick) : null;
+  }
+  function apply() {
+    island.style.width = springs.w.x + "px";
+    island.style.height = springs.h.x + "px";
+    island.style.borderRadius = springs.r.x + "px";
+  }
+  apply();
+
+  /* ---------- state ---------- */
+  var state = { act: null, expanded: false };
+  var iv = {};
+  var timerLeft = 754, timerTotal = 754, timerPaused = false;
+  var callLeft = 47;
+  var tracks = [
+    { t: "Midnight City", a: "M83", g: "g1", len: 206 },
+    { t: "Nightcall", a: "Kavinsky", g: "g2", len: 258 },
+    { t: "Intro", a: "The xx", g: "g3", len: 167 }
+  ];
+  var ti = 0, musicCur = 107, musicPaused = false;
+
+  function fmt(s) { s = Math.max(0, s | 0); return ((s / 60) | 0) + ":" + ("0" + (s % 60)).slice(-2); }
+
+  /* ---------- ticks ---------- */
+  function stopTicks() { for (var k in iv) { clearInterval(iv[k]); delete iv[k]; } }
+  function startTicks() {
+    stopTicks();
+    if (state.act === "timer") {
+      iv.timer = setInterval(function () {
+        if (!timerPaused) {
+          timerLeft--;
+          if (timerLeft <= 0) { setActivity(null); return; }
+          var pct = 1 - timerLeft / timerTotal;
+          $("#ringT").style.strokeDashoffset = (276.5 * (1 - pct)).toFixed(1);
+          $("#cTimer").textContent = fmt(timerLeft);
+          $("#xTimer").textContent = fmt(timerLeft);
+        }
+      }, 1000);
+    } else if (state.act === "call") {
+      iv.call = setInterval(function () {
+        callLeft++;
+        var t = fmt(callLeft);
+        $("#cCall").textContent = t; $("#xCall").textContent = t;
+      }, 1000);
+    } else if (state.act === "music") {
+      iv.music = setInterval(function () {
+        if (musicPaused) return;
+        musicCur++;
+        if (musicCur >= tracks[ti].len) { nextTrack(); return; }
+        renderMusic();
+      }, 1000);
+    }
+  }
+
+  /* ---------- content swap ---------- */
+  function showBlock(root, act) {
+    $$(root + " [data-act]").forEach(function (el) {
+      el.classList.toggle("on", el.getAttribute("data-act") === act);
+    });
+  }
+  function renderMusic() {
+    var tr = tracks[ti], pct = (musicCur / tr.len) * 100;
+    $("#xProg").style.width = pct.toFixed(1) + "%";
+    $("#xCur").textContent = fmt(musicCur);
+    $("#xRem").textContent = "-" + fmt(tr.len - musicCur);
+  }
+  function setTrackUI() {
+    var tr = tracks[ti];
+    $("#xTitle").textContent = tr.t; $("#xSub").textContent = tr.a;
+    $("#xArt").className = "art art-lg " + tr.g;
+    $("#cArt").className = "art " + tr.g;
+    musicCur = Math.round(tr.len * 0.5);
+    renderMusic();
+  }
+
+  /* ---------- activity ---------- */
+  function setActivity(act) {
+    if (act === state.act) return;
+    var wasExpanded = state.expanded;
+    stopTicks();
+    state.act = act;
+    state.expanded = false;
+
+    $$(".chip").forEach(function (c) { c.setAttribute("aria-pressed", String(c.dataset.act === act)); });
+    $$(".c-block").forEach(function (b) {
+      if (b.getAttribute("data-act") === "faceid") b.classList.remove("fi-done");
+    });
+    var wave = $("#wave"); if (wave) wave.classList.remove("paused");
+    var playIco = $("#playIco");
+    if (playIco) playIco.innerHTML = '<path d="M8 5h3v14H8zM13 5h3v14h-3z"/>';
+    $("#playBtn").setAttribute("aria-label", "Пауза");
+    musicPaused = false; timerPaused = false;
+    var pb = $("#pauseBtn"); if (pb) pb.textContent = "Пауза";
+
+    var size;
+    if (!act) {
+      size = IDLE;
+      compactL.classList.remove("on"); expandedL.classList.remove("on");
+      springTo({ w: size.w, h: size.h, r: size.r }, wasExpanded ? 0.8 : 1, 0.3);
+      stage.classList.remove("exp");
+      hint.textContent = "Нажми на островок, чтобы раскрыть";
+    } else if (!wasExpanded) {
+      size = { w: COMPACT[act], h: 37, r: 18.5 };
+      compactL.classList.add("on"); expandedL.classList.remove("on");
+      showBlock("#compact", act);
+      springTo({ w: size.w, h: size.h, r: size.r }, 1, 0.26);
+      hint.textContent = "Ещё нажатие — раскроется";
+    } else {
+      size = EXP[act];
+      expandedL.classList.add("on"); compactL.classList.remove("on");
+      showBlock("#expanded", act);
+      springTo({ w: size.w, h: size.h, r: size.r }, 1, 0.3);
+    }
+    island.setAttribute("aria-label", act ? (state.expanded ? "Свернуть" : "Раскрыть") : "Динамический островок");
+    if (act) startTicks();
+    if (act === "faceid") runFaceId();
+  }
+
+  function setExpanded(v) {
+    if (!state.act || v === state.expanded || state.act === "faceid") return;
+    state.expanded = v;
+    island.setAttribute("aria-expanded", String(v));
+    var size = v ? EXP[state.act] : { w: COMPACT[state.act], h: 37, r: 18.5 };
+    springTo({ w: size.w, h: size.h, r: size.r }, v ? 0.78 : 1, v ? 0.34 : 0.3);
+    expandedL.classList.toggle("on", v);
+    compactL.classList.toggle("on", !v);
+    if (v) showBlock("#expanded", state.act); else showBlock("#compact", state.act);
+    stage.classList.toggle("exp", v);
+    hint.textContent = v ? "Нажми вне островка, чтобы свернуть" : "Ещё нажатие — раскроется";
+    island.setAttribute("aria-label", v ? "Свернуть" : "Раскрыть");
+  }
+
+  function runFaceId() {
+    var b = $('.c-block[data-act="faceid"]');
+    setTimeout(function () {
+      if (state.act !== "faceid") return;
+      b.classList.add("fi-done");
+      setTimeout(function () { if (state.act === "faceid") setActivity(null); }, 950);
+    }, 1500);
+  }
+
+  /* ---------- events ---------- */
+  island.addEventListener("click", function () {
+    if (!state.act || state.act === "faceid") return;
+    setExpanded(!state.expanded);
+  });
+  stage.addEventListener("click", function (e) {
+    if (state.expanded && !island.contains(e.target)) setExpanded(false);
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && state.expanded) setExpanded(false);
+  });
+  $$(".chip").forEach(function (c) {
+    c.addEventListener("click", function () {
+      var a = c.dataset.act;
+      setActivity(state.act === a ? null : a);
+    });
+  });
+  $$("[data-end]").forEach(function (b) {
+    b.addEventListener("click", function (e) { e.stopPropagation(); setActivity(null); });
+  });
+  $("#playBtn").addEventListener("click", function (e) {
+    e.stopPropagation();
+    musicPaused = !musicPaused;
+    $("#wave").classList.toggle("paused", musicPaused);
+    $("#playIco").innerHTML = musicPaused ? '<path d="M8 5v14l11-7z"/>' : '<path d="M8 5h3v14H8zM13 5h3v14h-3z"/>';
+    this.setAttribute("aria-label", musicPaused ? "Играть" : "Пауза");
+  });
+  $("#prevBtn").addEventListener("click", function (e) { e.stopPropagation(); ti = (ti + tracks.length - 1) % tracks.length; setTrackUI(); });
+  $("#nextBtn").addEventListener("click", function (e) { e.stopPropagation(); ti = (ti + 1) % tracks.length; setTrackUI(); });
+  $("#pauseBtn").addEventListener("click", function (e) {
+    e.stopPropagation();
+    timerPaused = !timerPaused;
+    this.textContent = timerPaused ? "Дальше" : "Пауза";
+  });
+  $("#muteBtn").addEventListener("click", function (e) {
+    e.stopPropagation();
+    var m = this.classList.toggle("muted");
+    $("#muteX").style.display = m ? "none" : "";
+    $("#muteArc").style.display = m ? "" : "none";
+    this.setAttribute("aria-label", m ? "Включить звук" : "Выключить звук");
+  });
+
+  /* ---------- clock ---------- */
+  function tickClock() {
+    var d = new Date();
+    $("#clock").textContent = d.getHours() + ":" + ("0" + d.getMinutes()).slice(-2);
+  }
+  tickClock(); setInterval(tickClock, 15000);
+
+  setTrackUI();
+  $("#ringT").style.strokeDashoffset = "0";
+  $("#ringC").style.strokeDashoffset = (276.5 * (1 - 0.84)).toFixed(1);
+})();
+</script>
+</body>
+</html>
