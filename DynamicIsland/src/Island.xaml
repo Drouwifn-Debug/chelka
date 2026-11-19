@@ -1,0 +1,858 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Dynamic Island" Width="720" Height="580"
+        WindowStyle="None" AllowsTransparency="True" Background="{x:Null}"
+        Topmost="True" ShowInTaskbar="False" ShowActivated="False"
+        ResizeMode="NoResize" Focusable="False" UseLayoutRounding="False"
+        FontFamily="Segoe UI Variable Text, Segoe UI" TextOptions.TextFormattingMode="Ideal">
+  <Window.Resources>
+
+    <!-- ===== buttons ===== -->
+    <Style x:Key="IcoBtn" TargetType="Button">
+      <Setter Property="Foreground" Value="White"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Grid x:Name="root" RenderTransformOrigin="0.5,0.5">
+              <Grid.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></Grid.RenderTransform>
+              <Border x:Name="bg" Background="{TemplateBinding Background}" CornerRadius="12" Padding="{TemplateBinding Padding}">
+                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              </Border>
+              <Border x:Name="hov" CornerRadius="12" Background="#FFFFFF" Opacity="0" IsHitTestVisible="False"/>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0.14" Duration="0:0:0.16"></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1.045" Duration="0:0:0.2"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1.045" Duration="0:0:0.2"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation></Storyboard></BeginStoryboard></Trigger.EnterActions>
+                <Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.3"></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1" Duration="0:0:0.3"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1" Duration="0:0:0.3"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation></Storyboard></BeginStoryboard></Trigger.ExitActions>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0.26" Duration="0:0:0.07"></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="0.95" Duration="0:0:0.08"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="0.95" Duration="0:0:0.08"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation></Storyboard></BeginStoryboard></Trigger.EnterActions>
+                <Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0.14" Duration="0:0:0.2"></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1.045" Duration="0:0:0.34"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1.045" Duration="0:0:0.34"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction></DoubleAnimation></Storyboard></BeginStoryboard></Trigger.ExitActions>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="RoundBtn" TargetType="Button">
+      <Setter Property="Background" Value="#18FFFFFF"/>
+      <Setter Property="Foreground" Value="White"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Grid>
+              <Border x:Name="bg" Background="{TemplateBinding Background}" CornerRadius="99" BorderBrush="#1FFFFFFF" BorderThickness="1"/>
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              <Border x:Name="hov" CornerRadius="99" Background="#FFFFFF" Opacity="0" IsHitTestVisible="False"/>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0.13" Duration="0:0:0.14"/></Storyboard></BeginStoryboard></Trigger.EnterActions>
+                <Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.25"/></Storyboard></BeginStoryboard></Trigger.ExitActions>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0.25" Duration="0:0:0.07"/></Storyboard></BeginStoryboard></Trigger.EnterActions>
+                <Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0.13" Duration="0:0:0.18"/></Storyboard></BeginStoryboard></Trigger.ExitActions>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="PlayBtn" TargetType="Button">
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Grid>
+              <Border x:Name="bg" Background="{TemplateBinding Background}" CornerRadius="99"/>
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              <Border x:Name="hov" CornerRadius="99" Background="#000000" Opacity="0" IsHitTestVisible="False"/>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0.08" Duration="0:0:0.14"/></Storyboard></BeginStoryboard></Trigger.EnterActions>
+                <Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.25"/></Storyboard></BeginStoryboard></Trigger.ExitActions>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0.16" Duration="0:0:0.07"/></Storyboard></BeginStoryboard></Trigger.EnterActions>
+                <Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0.08" Duration="0:0:0.18"/></Storyboard></BeginStoryboard></Trigger.ExitActions>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="TransportBtn" TargetType="Button">
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Grid x:Name="root" Background="Transparent" RenderTransformOrigin="0.5,0.5">
+              <Grid.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></Grid.RenderTransform>
+              <Ellipse x:Name="hov" Fill="#FFFFFF" Opacity="0" IsHitTestVisible="False"/>
+              <Ellipse x:Name="bgc" Fill="{TemplateBinding Background}" IsHitTestVisible="False"/>
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Trigger.EnterActions><BeginStoryboard><Storyboard>
+                  <DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0.12" Duration="0:0:0.15"/>
+                  <DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1.06" Duration="0:0:0.15"/>
+                  <DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1.06" Duration="0:0:0.15"/>
+                </Storyboard></BeginStoryboard></Trigger.EnterActions>
+                <Trigger.ExitActions><BeginStoryboard><Storyboard>
+                  <DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.25"/>
+                  <DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1" Duration="0:0:0.25"/>
+                  <DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1" Duration="0:0:0.25"/>
+                </Storyboard></BeginStoryboard></Trigger.ExitActions>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Trigger.EnterActions><BeginStoryboard><Storyboard>
+                  <DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0.24" Duration="0:0:0.06"/>
+                  <DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="0.86" Duration="0:0:0.07"/>
+                  <DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="0.86" Duration="0:0:0.07"/>
+                </Storyboard></BeginStoryboard></Trigger.EnterActions>
+                <Trigger.ExitActions><BeginStoryboard><Storyboard>
+                  <DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0.12" Duration="0:0:0.2"/>
+                  <DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1.06" Duration="0:0:0.34"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.7"/></DoubleAnimation.EasingFunction></DoubleAnimation>
+                  <DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1.06" Duration="0:0:0.34"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.7"/></DoubleAnimation.EasingFunction></DoubleAnimation>
+                </Storyboard></BeginStoryboard></Trigger.ExitActions>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="TabBtn" TargetType="Button">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="#99FFFFFF"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Margin" Value="0,0,2,0"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Grid x:Name="root" RenderTransformOrigin="0.5,0.5">
+              <Grid.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></Grid.RenderTransform>
+              <Border x:Name="hov" CornerRadius="14" Background="#FFFFFF" Opacity="0" IsHitTestVisible="False"/>
+              <Border x:Name="bg" Background="{TemplateBinding Background}" CornerRadius="14" Padding="11,7">
+                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              </Border>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0.10" Duration="0:0:0.16"></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1.04" Duration="0:0:0.2"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1.04" Duration="0:0:0.2"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation></Storyboard></BeginStoryboard></Trigger.EnterActions>
+                <Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.3"></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1" Duration="0:0:0.3"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1" Duration="0:0:0.3"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation></Storyboard></BeginStoryboard></Trigger.ExitActions>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="0.95" Duration="0:0:0.08"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="0.95" Duration="0:0:0.08"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation></Storyboard></BeginStoryboard></Trigger.EnterActions>
+                <Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1.04" Duration="0:0:0.3"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1.04" Duration="0:0:0.3"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction></DoubleAnimation></Storyboard></BeginStoryboard></Trigger.ExitActions>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="PillBtn" TargetType="Button" BasedOn="{StaticResource IcoBtn}">
+      <Setter Property="Background" Value="#22FFFFFF"/>
+      <Setter Property="FontSize" Value="11.5"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Padding" Value="12,6"/>
+      <Setter Property="Margin" Value="0,0,6,0"/>
+    </Style>
+
+    <Style x:Key="ClipCard" TargetType="Button">
+      <Setter Property="Background" Value="#12FFFFFF"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Grid x:Name="root" RenderTransformOrigin="0.5,0.5">
+              <Grid.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></Grid.RenderTransform>
+              <Border x:Name="bg" Background="{TemplateBinding Background}" CornerRadius="12" Padding="12,8" Margin="0,0,0,5">
+                <TextBlock Text="{TemplateBinding Content}" FontSize="12" Foreground="#E0FFFFFF" TextTrimming="CharacterEllipsis"/>
+              </Border>
+              <Border x:Name="hov" CornerRadius="12" Background="#FFFFFF" Opacity="0" IsHitTestVisible="False" Margin="0,0,0,5"/>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0.11" Duration="0:0:0.16"></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1.012" Duration="0:0:0.2"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1.012" Duration="0:0:0.2"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation></Storyboard></BeginStoryboard></Trigger.EnterActions>
+                <Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.3"></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1" Duration="0:0:0.3"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1" Duration="0:0:0.3"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation></Storyboard></BeginStoryboard></Trigger.ExitActions>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0.22" Duration="0:0:0.07"></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="0.985" Duration="0:0:0.08"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="0.985" Duration="0:0:0.08"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation></Storyboard></BeginStoryboard></Trigger.EnterActions>
+                <Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0.11" Duration="0:0:0.2"></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1.012" Duration="0:0:0.3"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1.012" Duration="0:0:0.3"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction></DoubleAnimation></Storyboard></BeginStoryboard></Trigger.ExitActions>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="DotBtn" TargetType="Button">
+      <Setter Property="Width" Value="24"/>
+      <Setter Property="Height" Value="24"/>
+      <Setter Property="Margin" Value="0,0,9,9"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Grid x:Name="root" RenderTransformOrigin="0.5,0.5">
+              <Grid.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></Grid.RenderTransform>
+              <Border x:Name="sel" CornerRadius="15" BorderBrush="#F2FFFFFF" BorderThickness="1.6" Margin="-4" Opacity="0" IsHitTestVisible="False"/>
+              <Border x:Name="ring" CornerRadius="15" BorderBrush="#99FFFFFF" BorderThickness="1.2" Margin="-4" Opacity="0" IsHitTestVisible="False"/>
+              <Border x:Name="bg" Background="{TemplateBinding Background}" CornerRadius="12" BorderBrush="#48FFFFFF" BorderThickness="1"/>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="Tag" Value="sel">
+                <Setter TargetName="sel" Property="Opacity" Value="1"/>
+              </Trigger>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="ring" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.18"></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1.2" Duration="0:0:0.34"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1.2" Duration="0:0:0.34"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction></DoubleAnimation></Storyboard></BeginStoryboard></Trigger.EnterActions>
+                <Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="ring" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.3"></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1" Duration="0:0:0.3"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1" Duration="0:0:0.3"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation></Storyboard></BeginStoryboard></Trigger.ExitActions>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="0.88" Duration="0:0:0.08"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="0.88" Duration="0:0:0.08"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation></Storyboard></BeginStoryboard></Trigger.EnterActions>
+                <Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1.2" Duration="0:0:0.3"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1.2" Duration="0:0:0.3"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction></DoubleAnimation></Storyboard></BeginStoryboard></Trigger.ExitActions>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="Switch" TargetType="ToggleButton">
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ToggleButton">
+            <Grid>
+              <Border x:Name="track" Width="40" Height="23" CornerRadius="12" Background="#33FFFFFF">
+                <Border x:Name="knob" Width="17" Height="17" CornerRadius="9" Background="#F5FFFFFF" HorizontalAlignment="Left" Margin="3,0,0,0">
+                  <Border.RenderTransform><TranslateTransform X="0"/></Border.RenderTransform>
+                </Border>
+              </Border>
+              <Border x:Name="hov" Width="40" Height="23" CornerRadius="12" Background="#FFFFFF" Opacity="0" IsHitTestVisible="False"/>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0.13" Duration="0:0:0.16"></DoubleAnimation></Storyboard></BeginStoryboard></Trigger.EnterActions>
+                <Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.3"></DoubleAnimation></Storyboard></BeginStoryboard></Trigger.ExitActions>
+              </Trigger>
+              <Trigger Property="IsChecked" Value="True">
+                <Trigger.EnterActions>
+                  <BeginStoryboard>
+                    <Storyboard>
+                      <ColorAnimation Storyboard.TargetName="track" Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)" To="#FF30D158" Duration="0:0:0.22"/>
+                      <DoubleAnimation Storyboard.TargetName="knob" Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.X)" To="17" Duration="0:0:0.24">
+                        <DoubleAnimation.EasingFunction><BackEase Amplitude="0.55" EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                      </DoubleAnimation>
+                    </Storyboard>
+                  </BeginStoryboard>
+                </Trigger.EnterActions>
+                <Trigger.ExitActions>
+                  <BeginStoryboard>
+                    <Storyboard>
+                      <ColorAnimation Storyboard.TargetName="track" Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)" To="#33FFFFFF" Duration="0:0:0.26"/>
+                      <DoubleAnimation Storyboard.TargetName="knob" Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.X)" To="0" Duration="0:0:0.26"/>
+                    </Storyboard>
+                  </BeginStoryboard>
+                </Trigger.ExitActions>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- site tile -->
+    <Style x:Key="SiteTile" TargetType="Button">
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Grid x:Name="root" RenderTransformOrigin="0.5,0.5" Background="Transparent">
+              <Grid.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></Grid.RenderTransform>
+              <Border x:Name="bg" Background="#14FFFFFF" BorderBrush="#1EFFFFFF" BorderThickness="1" CornerRadius="19"/>
+              <Border x:Name="hov" CornerRadius="19" Background="#FFFFFF" Opacity="0" IsHitTestVisible="False"/>
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0.11" Duration="0:0:0.18"></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1.05" Duration="0:0:0.34"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1.05" Duration="0:0:0.34"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction></DoubleAnimation><ColorAnimation Storyboard.TargetName="bg" Storyboard.TargetProperty="(Border.BorderBrush).(SolidColorBrush.Color)" To="#52FFFFFF" Duration="0:0:0.2"/></Storyboard></BeginStoryboard></Trigger.EnterActions>
+                <Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.3"></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1" Duration="0:0:0.3"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1" Duration="0:0:0.3"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation><ColorAnimation Storyboard.TargetName="bg" Storyboard.TargetProperty="(Border.BorderBrush).(SolidColorBrush.Color)" To="#1EFFFFFF" Duration="0:0:0.3"/></Storyboard></BeginStoryboard></Trigger.ExitActions>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0.22" Duration="0:0:0.07"></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="0.94" Duration="0:0:0.08"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="0.94" Duration="0:0:0.08"><DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction></DoubleAnimation></Storyboard></BeginStoryboard></Trigger.EnterActions>
+                <Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="hov" Storyboard.TargetProperty="Opacity" To="0.11" Duration="0:0:0.2"></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1.05" Duration="0:0:0.3"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction></DoubleAnimation><DoubleAnimation Storyboard.TargetName="root" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1.05" Duration="0:0:0.3"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction></DoubleAnimation></Storyboard></BeginStoryboard></Trigger.ExitActions>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- text box -->
+    <Style x:Key="GlassBox" TargetType="TextBox">
+      <Setter Property="Foreground" Value="White"/>
+      <Setter Property="CaretBrush" Value="White"/>
+      <Setter Property="SelectionBrush" Value="#770A84FF"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="TextBox">
+            <Border x:Name="fbg" Background="#1EFFFFFF" BorderBrush="#26FFFFFF" BorderThickness="1" CornerRadius="12" Padding="12,8">
+              <ScrollViewer x:Name="PART_ContentHost" Focusable="False" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsKeyboardFocused" Value="True">
+                <Trigger.EnterActions><BeginStoryboard><Storyboard>
+                  <ColorAnimation Storyboard.TargetName="fbg" Storyboard.TargetProperty="(Border.BorderBrush).(SolidColorBrush.Color)" To="#A0FFFFFF" Duration="0:0:0.18"/>
+                  <ColorAnimation Storyboard.TargetName="fbg" Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)" To="#2CFFFFFF" Duration="0:0:0.18"/>
+                </Storyboard></BeginStoryboard></Trigger.EnterActions>
+                <Trigger.ExitActions><BeginStoryboard><Storyboard>
+                  <ColorAnimation Storyboard.TargetName="fbg" Storyboard.TargetProperty="(Border.BorderBrush).(SolidColorBrush.Color)" To="#26FFFFFF" Duration="0:0:0.25"/>
+                  <ColorAnimation Storyboard.TargetName="fbg" Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)" To="#1EFFFFFF" Duration="0:0:0.25"/>
+                </Storyboard></BeginStoryboard></Trigger.ExitActions>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="CardTxt" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="#A0FFFFFF"/>
+      <Setter Property="FontSize" Value="12"/>
+    </Style>
+    <Style x:Key="SecLabel" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="#80FFFFFF"/>
+      <Setter Property="FontSize" Value="10.5"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Margin" Value="0,0,0,8"/>
+    </Style>
+    <Style x:Key="RowTxt" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="#EBFFFFFF"/>
+      <Setter Property="FontSize" Value="11.5"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+    <Style x:Key="WxIco" TargetType="Path">
+      <Setter Property="StrokeThickness" Value="1.7"/>
+      <Setter Property="StrokeLineJoin" Value="Round"/>
+      <Setter Property="StrokeStartLineCap" Value="Round"/>
+      <Setter Property="StrokeEndLineCap" Value="Round"/>
+      <Setter Property="Stroke" Value="#EAF2FF"/>
+    </Style>
+  </Window.Resources>
+
+  <Canvas x:Name="root">
+
+    <!-- soft shadow, cut out under the glass so it never darkens it -->
+    <Canvas x:Name="ShadowWrap" Width="720" Height="580" IsHitTestVisible="False">
+      <Canvas.Clip>
+        <CombinedGeometry GeometryCombineMode="Exclude">
+          <CombinedGeometry.Geometry1><RectangleGeometry Rect="0,0,720,580"/></CombinedGeometry.Geometry1>
+          <CombinedGeometry.Geometry2><RectangleGeometry x:Name="shadowHole" Rect="302,10,116,34" RadiusX="17" RadiusY="17"/></CombinedGeometry.Geometry2>
+        </CombinedGeometry>
+      </Canvas.Clip>
+      <Border x:Name="ShadowShape" Width="116" Height="34" Canvas.Left="302" Canvas.Top="10" CornerRadius="17" Background="#FF000000">
+        <Border.Effect><DropShadowEffect x:Name="shadowFx" BlurRadius="30" ShadowDepth="9" Direction="270" Opacity="0.42"/></Border.Effect>
+      </Border>
+    </Canvas>
+
+    <!-- ===================== THE ISLAND ===================== -->
+    <Grid x:Name="Island" Width="116" Height="34" Canvas.Left="302" Canvas.Top="10" Cursor="Hand" Background="Transparent">
+      <Grid.Clip>
+        <RectangleGeometry x:Name="islandClip" Rect="0,0,116,34" RadiusX="17" RadiusY="17"/>
+      </Grid.Clip>
+
+      <!-- glass body: blurred snapshot of what is behind the island, then the tint -->
+      <Canvas x:Name="BdCanvas" IsHitTestVisible="False" Opacity="0">
+        <Image x:Name="bdImg" Width="540" Height="440" Stretch="Fill" RenderOptions.BitmapScalingMode="Linear">
+          <Image.RenderTransform><TranslateTransform X="0"/></Image.RenderTransform>
+        </Image>
+      </Canvas>
+      <Border x:Name="TintLayer" Background="#B0101014"/>
+      <Border x:Name="WashLayer" Opacity="0" IsHitTestVisible="False">
+        <Border.Background>
+          <RadialGradientBrush Center="0.12,0.1" GradientOrigin="0.12,0.1" RadiusX="1.15" RadiusY="1.4">
+            <GradientStop x:Name="washC0" Color="#70FFFFFF" Offset="0"/>
+            <GradientStop x:Name="washC1" Color="#00FFFFFF" Offset="1"/>
+          </RadialGradientBrush>
+        </Border.Background>
+      </Border>
+
+      <!-- ================= COMPACT ================= -->
+      <Grid x:Name="CompactLayer" Visibility="Visible">
+
+        <Grid x:Name="cIdle" Width="150" Height="34" HorizontalAlignment="Center" VerticalAlignment="Top" Visibility="Hidden" RenderTransformOrigin="0.5,0.5">
+          <Grid.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></Grid.RenderTransform>
+          <TextBlock x:Name="cIdleTxt" Text="" Foreground="#E6FFFFFF" FontSize="12.5" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0"/>
+        </Grid>
+
+        <Grid x:Name="cMusic" Width="248" Height="34" HorizontalAlignment="Center" VerticalAlignment="Top" Visibility="Hidden" RenderTransformOrigin="0.5,0.5">
+          <Grid.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></Grid.RenderTransform>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
+          <Border Width="22" Height="22" CornerRadius="7" Margin="7,0,0,0" VerticalAlignment="Center" Background="#22FFFFFF">
+            <Grid>
+              <TextBlock Text="♪" FontSize="11" Foreground="#66FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              <Border CornerRadius="7"><Border.Background><ImageBrush x:Name="artS" Stretch="UniformToFill"/></Border.Background></Border>
+            </Grid>
+          </Border>
+          <TextBlock x:Name="cMusicTxt" Grid.Column="1" Text="" Foreground="White" FontSize="11.5" FontWeight="SemiBold" Margin="9,0,8,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+          <StackPanel x:Name="pausePanel" Grid.Column="2" Orientation="Horizontal" Margin="0,0,11,0" VerticalAlignment="Center" Opacity="0" IsHitTestVisible="False">
+            <Rectangle Width="3" Height="11" RadiusX="1.2" RadiusY="1.2" Fill="#E6FFFFFF" Margin="0,0,3,0"/>
+            <Rectangle Width="3" Height="11" RadiusX="1.2" RadiusY="1.2" Fill="#E6FFFFFF"/>
+          </StackPanel>
+          <StackPanel x:Name="wavePanel" Grid.Column="2" Orientation="Horizontal" Margin="0,0,10,0" VerticalAlignment="Center">
+            <Rectangle x:Name="w1" Width="2.6" Height="9"  RadiusX="1.3" RadiusY="1.3" Fill="#F2F2F2" Margin="0,0,2.4,0"/>
+            <Rectangle x:Name="w2" Width="2.6" Height="14" RadiusX="1.3" RadiusY="1.3" Fill="#F2F2F2" Margin="0,0,2.4,0"/>
+            <Rectangle x:Name="w3" Width="2.6" Height="6"  RadiusX="1.3" RadiusY="1.3" Fill="#F2F2F2" Margin="0,0,2.4,0"/>
+            <Rectangle x:Name="w4" Width="2.6" Height="12" RadiusX="1.3" RadiusY="1.3" Fill="#F2F2F2" Margin="0,0,2.4,0"/>
+            <Rectangle x:Name="w5" Width="2.6" Height="8"  RadiusX="1.3" RadiusY="1.3" Fill="#F2F2F2"/>
+          </StackPanel>
+        </Grid>
+
+        <Grid x:Name="cTimer" Width="160" Height="34" HorizontalAlignment="Center" VerticalAlignment="Top" Visibility="Hidden" RenderTransformOrigin="0.5,0.5">
+          <Grid.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></Grid.RenderTransform>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+            <Canvas Width="16" Height="16" VerticalAlignment="Center" Margin="0,0,7,0">
+              <Ellipse Canvas.Left="1" Canvas.Top="2" Width="14" Height="14" Stroke="#FF9F0A" StrokeThickness="1.8"/>
+              <Path Data="M8 5.5 V9 L10.5 10.5" Stroke="#FF9F0A" StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+              <Path Data="M5.5 1 h5" Stroke="#FF9F0A" StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+            </Canvas>
+            <TextBlock x:Name="cTimerTxt" Text="5:00" Foreground="White" FontSize="12.5" FontWeight="SemiBold" VerticalAlignment="Center"/>
+          </StackPanel>
+        </Grid>
+
+        <Grid x:Name="cCharge" Width="150" Height="34" HorizontalAlignment="Center" VerticalAlignment="Top" Visibility="Hidden" RenderTransformOrigin="0.5,0.5">
+          <Grid.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></Grid.RenderTransform>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+            <Path x:Name="cChargeIco" Data="M9 0 L2.5 9 h4 L6 16 L13.5 6 H9.5 Z" Fill="#30D158" Width="12" Margin="0,0,7,0" Stretch="Uniform" VerticalAlignment="Center"/>
+            <TextBlock x:Name="cChargeTxt" Text="84%" Foreground="White" FontSize="12.5" FontWeight="SemiBold" VerticalAlignment="Center"/>
+          </StackPanel>
+        </Grid>
+
+        <Grid x:Name="cDone" Width="150" Height="34" HorizontalAlignment="Center" VerticalAlignment="Top" Visibility="Hidden" RenderTransformOrigin="0.5,0.5">
+          <Grid.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></Grid.RenderTransform>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+            <Path Data="M2 8 l4.5 4.5 L14.5 3" Stroke="#30D158" StrokeThickness="2.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Width="14" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,7,0"/>
+            <TextBlock Text="Готово" Foreground="White" FontSize="12.5" FontWeight="SemiBold" VerticalAlignment="Center"/>
+          </StackPanel>
+        </Grid>
+
+        <Grid x:Name="cVol" Width="220" Height="34" HorizontalAlignment="Center" VerticalAlignment="Top" Visibility="Hidden" RenderTransformOrigin="0.5,0.5">
+          <Grid.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></Grid.RenderTransform>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+            <Viewbox Width="16" Height="16" Margin="0,0,9,0">
+              <Canvas Width="24" Height="24">
+                <Path Data="M11 5 6.5 9H3v6h3.5L11 19z" Fill="White"/>
+                <Path x:Name="cVolWave" Data="M15.5 8.5a5 5 0 0 1 0 7 M18.5 5.5a9 9 0 0 1 0 13" Stroke="White" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                <Path x:Name="cVolMute" Data="M15 9.5l5 5 M20 9.5l-5 5" Stroke="#FF453A" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Visibility="Collapsed"/>
+              </Canvas>
+            </Viewbox>
+            <Grid Width="130" Height="5" VerticalAlignment="Center">
+              <Border Background="#33FFFFFF" CornerRadius="2.5"/>
+              <Border x:Name="cVolFill" Background="#F5FFFFFF" CornerRadius="2.5" HorizontalAlignment="Left" Width="0"/>
+            </Grid>
+          </StackPanel>
+        </Grid>
+      </Grid>
+
+      <!-- ================= EXPANDED PANEL ================= -->
+      <Grid x:Name="ExpandedLayer" Width="540" Height="440" HorizontalAlignment="Center" VerticalAlignment="Top" Visibility="Hidden" Opacity="0">
+        <Grid.RenderTransform><TranslateTransform x:Name="expT" Y="0"/></Grid.RenderTransform>
+
+        <Grid x:Name="tabBar" Margin="16,16,16,0" VerticalAlignment="Top" HorizontalAlignment="Center">
+          <Border x:Name="tabInd" Background="#F2F2F2" CornerRadius="14" HorizontalAlignment="Left" Width="60" Opacity="0">
+            <Border.RenderTransform><TranslateTransform X="0"/></Border.RenderTransform>
+          </Border>
+          <StackPanel x:Name="tabRow" Orientation="Horizontal">
+            <Button x:Name="tbMusic" Style="{StaticResource TabBtn}" Content="Музыка"/>
+            <Button x:Name="tbSites" Style="{StaticResource TabBtn}" Content="Сайты"/>
+            <Button x:Name="tbSys" Style="{StaticResource TabBtn}" Content="Система"/>
+            <Button x:Name="tbClip" Style="{StaticResource TabBtn}" Content="Буфер"/>
+            <Button x:Name="tbWeather" Style="{StaticResource TabBtn}" Content="Погода"/>
+            <Button x:Name="tbView" Style="{StaticResource TabBtn}" Content="Вид"/>
+            <Button x:Name="tbMore" Style="{StaticResource TabBtn}" Content="Ещё"/>
+          </StackPanel>
+        </Grid>
+
+        <!-- music -->
+        <Grid x:Name="mMusic" Visibility="Visible" Margin="32,66,32,20" RenderTransformOrigin="0.5,0">
+          <Grid.RenderTransform><TranslateTransform Y="0"/></Grid.RenderTransform>
+          <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+            <Border Width="140" Height="140" CornerRadius="24" HorizontalAlignment="Center" Background="#22FFFFFF">
+              <Border.Effect><DropShadowEffect BlurRadius="22" ShadowDepth="6" Direction="270" Opacity="0.45"/></Border.Effect>
+              <Grid>
+                <TextBlock Text="♪" FontSize="44" Foreground="#40FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                <Border CornerRadius="24" BorderBrush="#33FFFFFF" BorderThickness="1"><Border.Background><ImageBrush x:Name="artB" Stretch="UniformToFill"/></Border.Background></Border>
+              </Grid>
+            </Border>
+            <TextBlock x:Name="mTitle" Text="" Foreground="White" FontSize="16.5" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,14,0,0" TextTrimming="CharacterEllipsis" MaxWidth="460"/>
+            <TextBlock x:Name="mArtist" Text="" Foreground="#A8FFFFFF" FontSize="12.5" HorizontalAlignment="Center" Margin="0,3,0,0" TextTrimming="CharacterEllipsis" MaxWidth="460"/>
+            <Grid x:Name="progHit" Width="460" Height="28" Background="Transparent" Cursor="Hand" HorizontalAlignment="Center" Margin="0,2,0,0">
+                <Border x:Name="progTrack" Height="6" CornerRadius="5" Background="#33FFFFFF" VerticalAlignment="Center" IsHitTestVisible="False"/>
+                <Border x:Name="progFill" Height="6" CornerRadius="5" Background="#F2F2F2" HorizontalAlignment="Left" VerticalAlignment="Center" Width="0" IsHitTestVisible="False"/>
+                <Ellipse x:Name="progKnob" Width="14" Height="14" Fill="#FFFFFF" HorizontalAlignment="Left" VerticalAlignment="Center" Opacity="0" RenderTransformOrigin="0.5,0.5" IsHitTestVisible="False">
+                  <Ellipse.RenderTransform><TransformGroup><ScaleTransform ScaleX="0.5" ScaleY="0.5"/><TranslateTransform X="0"/></TransformGroup></Ellipse.RenderTransform>
+                  <Ellipse.Effect><DropShadowEffect BlurRadius="5" ShadowDepth="1" Opacity="0.4"/></Ellipse.Effect>
+                </Ellipse>
+                <Border x:Name="progTip" Opacity="0" IsHitTestVisible="False" Background="#EE1C1C22" BorderBrush="#2EFFFFFF" BorderThickness="1" CornerRadius="9" Width="50" Height="22" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,-27,0,0">
+                  <Border.RenderTransform><TranslateTransform X="0"/></Border.RenderTransform>
+                  <TextBlock x:Name="progTipTxt" Text="0:00" Foreground="White" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+              </Grid>
+            <Grid Margin="0,-6,0,0" Width="460" HorizontalAlignment="Center">
+              <TextBlock x:Name="mPos" Text="0:00" Style="{StaticResource CardTxt}" FontSize="10.5" HorizontalAlignment="Left"/>
+              <TextBlock x:Name="mRem" Text="-0:00" Style="{StaticResource CardTxt}" FontSize="10.5" HorizontalAlignment="Right"/>
+            </Grid>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,8,0,0">
+              <Button x:Name="btnPrev" Style="{StaticResource TransportBtn}" Width="52" Height="52" Margin="0,0,14,0">
+                <Path x:Name="icoPrev" Data="M20.4 5.8 L11.6 12 L20.4 18.2 Z M11.6 5.8 L2.8 12 L11.6 18.2 Z" Fill="#F2FFFFFF" Stroke="#F2FFFFFF" StrokeThickness="2.2" StrokeLineJoin="Round" Width="28" Height="28" Stretch="Uniform">
+                  <Path.RenderTransform><TranslateTransform X="0"/></Path.RenderTransform>
+                </Path>
+              </Button>
+              <Button x:Name="btnPlay" Style="{StaticResource TransportBtn}" Background="#F7F7F7" Width="64" Height="64">
+                <Grid Width="26" Height="26">
+                  <Canvas x:Name="icoPause" Width="24" Height="24" RenderTransformOrigin="0.5,0.5" Opacity="1">
+                    <Canvas.RenderTransform><ScaleTransform ScaleX="1" ScaleY="1"/></Canvas.RenderTransform>
+                    <Rectangle Canvas.Left="4.4" Canvas.Top="3.4" Width="5.4" Height="17.2" RadiusX="2" RadiusY="2" Fill="#FF0E0E12"/>
+                    <Rectangle Canvas.Left="14.2" Canvas.Top="3.4" Width="5.4" Height="17.2" RadiusX="2" RadiusY="2" Fill="#FF0E0E12"/>
+                  </Canvas>
+                  <Canvas x:Name="icoPlay" Width="24" Height="24" RenderTransformOrigin="0.5,0.5" Opacity="0">
+                    <Canvas.RenderTransform><ScaleTransform ScaleX="0.6" ScaleY="0.6"/></Canvas.RenderTransform>
+                    <Path Data="M6.6 4.6 L19.6 12 L6.6 19.4 Z" Fill="#FF0E0E12" Stroke="#FF0E0E12" StrokeThickness="2.4" StrokeLineJoin="Round"/>
+                  </Canvas>
+                </Grid>
+              </Button>
+              <Button x:Name="btnNext" Style="{StaticResource TransportBtn}" Width="52" Height="52" Margin="14,0,0,0">
+                <Path x:Name="icoNext" Data="M3.6 5.8 L12.4 12 L3.6 18.2 Z M12.4 5.8 L21.2 12 L12.4 18.2 Z" Fill="#F2FFFFFF" Stroke="#F2FFFFFF" StrokeThickness="2.2" StrokeLineJoin="Round" Width="28" Height="28" Stretch="Uniform">
+                  <Path.RenderTransform><TranslateTransform X="0"/></Path.RenderTransform>
+                </Path>
+              </Button>
+            </StackPanel>
+            <Grid Margin="0,14,0,0" Width="382" HorizontalAlignment="Center">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+              <Button x:Name="btnMute" Style="{StaticResource IcoBtn}" Background="Transparent" Width="26" Height="22" Margin="0,0,8,0">
+                <Viewbox Width="15" Height="15">
+                  <Canvas Width="24" Height="24">
+                    <Path Data="M11 5 6.5 9H3v6h3.5L11 19z" Fill="#E6FFFFFF"/>
+                    <Path x:Name="muteWave" Data="M15.5 8.5a5 5 0 0 1 0 7 M18.5 5.5a9 9 0 0 1 0 13" Stroke="#E6FFFFFF" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                    <Path x:Name="muteX" Data="M15 9.5l5 5 M20 9.5l-5 5" Stroke="#FF453A" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Visibility="Collapsed"/>
+                  </Canvas>
+                </Viewbox>
+              </Button>
+              <Grid x:Name="volHit" Width="300" Height="28" Background="Transparent" Cursor="Hand" Grid.Column="1" HorizontalAlignment="Left" VerticalAlignment="Center">
+                <Border x:Name="volTrack" Height="6" CornerRadius="5" Background="#33FFFFFF" VerticalAlignment="Center" IsHitTestVisible="False"/>
+                <Border x:Name="volFill" Height="6" CornerRadius="5" Background="#F2F2F2" HorizontalAlignment="Left" VerticalAlignment="Center" Width="0" IsHitTestVisible="False"/>
+                <Ellipse x:Name="volKnob" Width="14" Height="14" Fill="#FFFFFF" HorizontalAlignment="Left" VerticalAlignment="Center" Opacity="0" RenderTransformOrigin="0.5,0.5" IsHitTestVisible="False">
+                  <Ellipse.RenderTransform><TransformGroup><ScaleTransform ScaleX="0.5" ScaleY="0.5"/><TranslateTransform X="0"/></TransformGroup></Ellipse.RenderTransform>
+                  <Ellipse.Effect><DropShadowEffect BlurRadius="5" ShadowDepth="1" Opacity="0.4"/></Ellipse.Effect>
+                </Ellipse>
+                <Border x:Name="volTip" Opacity="0" IsHitTestVisible="False" Background="#EE1C1C22" BorderBrush="#2EFFFFFF" BorderThickness="1" CornerRadius="9" Width="50" Height="22" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,-27,0,0">
+                  <Border.RenderTransform><TranslateTransform X="0"/></Border.RenderTransform>
+                  <TextBlock x:Name="volTipTxt" Text="0:00" Foreground="White" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+              </Grid>
+              <TextBlock x:Name="volPct" Grid.Column="2" Text="50%" Style="{StaticResource CardTxt}" FontSize="11" Width="38" TextAlignment="Right" VerticalAlignment="Center"/>
+            </Grid>
+          </StackPanel>
+        </Grid>
+
+        <!-- clipboard -->
+        <Grid x:Name="mClip" Visibility="Hidden" Margin="32,66,32,20" RenderTransformOrigin="0.5,0">
+          <Grid.RenderTransform><TranslateTransform Y="0"/></Grid.RenderTransform>
+          <StackPanel>
+            <Grid Margin="0,0,0,8">
+              <TextBlock Text="БУФЕР ОБМЕНА · КЛИК — СКОПИРОВАТЬ" Style="{StaticResource SecLabel}" Margin="0" VerticalAlignment="Center"/>
+              <Button x:Name="btnClipClear" Style="{StaticResource PillBtn}" Content="Очистить" FontSize="10.5" Padding="10,3" Margin="0" HorizontalAlignment="Right"/>
+            </Grid>
+            <Button x:Name="cb1" Style="{StaticResource ClipCard}" Content=""/>
+            <Button x:Name="cb2" Style="{StaticResource ClipCard}" Content=""/>
+            <Button x:Name="cb3" Style="{StaticResource ClipCard}" Content=""/>
+            <Button x:Name="cb4" Style="{StaticResource ClipCard}" Content=""/>
+            <Button x:Name="cb5" Style="{StaticResource ClipCard}" Content=""/>
+            <Button x:Name="cb6" Style="{StaticResource ClipCard}" Content=""/>
+            <TextBlock x:Name="clipHint" Text="Пока пусто — скопируй что-нибудь" Foreground="#70FFFFFF" FontSize="11"/>
+          </StackPanel>
+        </Grid>
+
+        <!-- sites -->
+        <Grid x:Name="mSites" Visibility="Hidden" Margin="32,66,32,20" RenderTransformOrigin="0.5,0">
+          <Grid.RenderTransform><TranslateTransform Y="0"/></Grid.RenderTransform>
+          <Grid>
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+            <Grid Margin="0,0,0,10">
+              <TextBlock x:Name="sitesLabel" Text="БЫСТРЫЕ САЙТЫ · КЛИК — ОТКРЫТЬ" Style="{StaticResource SecLabel}" Margin="0" VerticalAlignment="Center"/>
+              <Button x:Name="btnSitesEdit" Style="{StaticResource PillBtn}" Content="Изменить" FontSize="10.5" Padding="10,3" Margin="0" HorizontalAlignment="Right"/>
+            </Grid>
+            <WrapPanel x:Name="sitesHost" Grid.Row="1" VerticalAlignment="Top"/>
+          </Grid>
+          <Grid x:Name="siteAdd" Visibility="Collapsed" Opacity="0" Background="#9A08080C" Margin="-8,-4,-8,-12">
+            <Border x:Name="siteCard" Width="400" CornerRadius="22" Background="#F2161619" BorderBrush="#2AFFFFFF" BorderThickness="1" Padding="20,16,20,18" HorizontalAlignment="Center" VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5">
+              <Border.RenderTransform><TransformGroup><ScaleTransform ScaleX="0.94" ScaleY="0.94"/><TranslateTransform X="0"/></TransformGroup></Border.RenderTransform>
+              <StackPanel>
+                <TextBlock Text="Новый сайт" Foreground="White" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                <Grid Margin="0,0,0,8">
+                  <TextBox x:Name="siteUrl" Style="{StaticResource GlassBox}"/>
+                  <TextBlock x:Name="siteUrlHint" Text="Адрес, например youtube.com" Style="{StaticResource CardTxt}" FontSize="13" IsHitTestVisible="False" Margin="13,0,0,0" VerticalAlignment="Center"/>
+                </Grid>
+                <Grid Margin="0,0,0,10">
+                  <TextBox x:Name="siteName" Style="{StaticResource GlassBox}"/>
+                  <TextBlock x:Name="siteNameHint" Text="Название (необязательно)" Style="{StaticResource CardTxt}" FontSize="13" IsHitTestVisible="False" Margin="13,0,0,0" VerticalAlignment="Center"/>
+                </Grid>
+                <TextBlock x:Name="siteErr" Text="" Foreground="#FF7A70" FontSize="11" Margin="2,0,0,8" Visibility="Collapsed"/>
+                <StackPanel Orientation="Horizontal">
+                  <Button x:Name="btnSiteOk" Style="{StaticResource PillBtn}" Content="Добавить" Background="#F2F2F2" Foreground="#101014"/>
+                  <Button x:Name="btnSitePaste" Style="{StaticResource PillBtn}" Content="Из буфера"/>
+                  <Button x:Name="btnSiteCancel" Style="{StaticResource PillBtn}" Content="Отмена" Margin="0"/>
+                </StackPanel>
+              </StackPanel>
+            </Border>
+          </Grid>
+        </Grid>
+
+        <!-- system load -->
+        <Grid x:Name="mSys" Visibility="Hidden" Margin="32,66,32,20" RenderTransformOrigin="0.5,0">
+          <Grid.RenderTransform><TranslateTransform Y="0"/></Grid.RenderTransform>
+          <StackPanel>
+            <Border Background="#14FFFFFF" BorderBrush="#1CFFFFFF" BorderThickness="1" CornerRadius="20" Padding="16,10,16,9" Margin="0,0,0,8">
+              <StackPanel>
+                <Grid>
+                  <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Ellipse x:Name="cpuDot" Width="8" Height="8" Fill="#0A84FF" Margin="0,1,8,0"/>
+                    <TextBlock Text="Процессор" Foreground="White" FontSize="13" FontWeight="SemiBold"/>
+                  </StackPanel>
+                  <TextBlock x:Name="cpuVal" Text="—" Foreground="White" FontSize="22" FontWeight="SemiBold" HorizontalAlignment="Right"/>
+                </Grid>
+                <Canvas Width="442" Height="34" ClipToBounds="True" Margin="0,3,0,4" HorizontalAlignment="Left">
+                  <Canvas x:Name="cpuPlot" Width="442" Height="34">
+                    <Canvas.RenderTransform><TranslateTransform X="0"/></Canvas.RenderTransform>
+                    <Polygon x:Name="cpuArea" Fill="#2E0A84FF"/>
+                    <Polyline x:Name="cpuLine" Stroke="#0A84FF" StrokeThickness="1.8" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                  </Canvas>
+                </Canvas>
+                <TextBlock x:Name="cpuSub" Text="" Style="{StaticResource CardTxt}" FontSize="10.5" TextTrimming="CharacterEllipsis"/>
+              </StackPanel>
+            </Border>
+            <Border Background="#14FFFFFF" BorderBrush="#1CFFFFFF" BorderThickness="1" CornerRadius="20" Padding="16,10,16,9" Margin="0,0,0,8">
+              <StackPanel>
+                <Grid>
+                  <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Ellipse x:Name="gpuDot" Width="8" Height="8" Fill="#30D158" Margin="0,1,8,0"/>
+                    <TextBlock Text="Видеокарта" Foreground="White" FontSize="13" FontWeight="SemiBold"/>
+                  </StackPanel>
+                  <TextBlock x:Name="gpuVal" Text="—" Foreground="White" FontSize="22" FontWeight="SemiBold" HorizontalAlignment="Right"/>
+                </Grid>
+                <Canvas Width="442" Height="34" ClipToBounds="True" Margin="0,3,0,4" HorizontalAlignment="Left">
+                  <Canvas x:Name="gpuPlot" Width="442" Height="34">
+                    <Canvas.RenderTransform><TranslateTransform X="0"/></Canvas.RenderTransform>
+                    <Polygon x:Name="gpuArea" Fill="#2E30D158"/>
+                    <Polyline x:Name="gpuLine" Stroke="#30D158" StrokeThickness="1.8" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                  </Canvas>
+                </Canvas>
+                <TextBlock x:Name="gpuSub" Text="" Style="{StaticResource CardTxt}" FontSize="10.5" TextTrimming="CharacterEllipsis"/>
+              </StackPanel>
+            </Border>
+            <Border Background="#14FFFFFF" BorderBrush="#1CFFFFFF" BorderThickness="1" CornerRadius="20" Padding="16,10,16,9" Margin="0,0,0,8">
+              <StackPanel>
+                <Grid>
+                  <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Ellipse x:Name="ramDot" Width="8" Height="8" Fill="#BF5AF2" Margin="0,1,8,0"/>
+                    <TextBlock Text="Оперативная память" Foreground="White" FontSize="13" FontWeight="SemiBold"/>
+                  </StackPanel>
+                  <TextBlock x:Name="ramVal" Text="—" Foreground="White" FontSize="22" FontWeight="SemiBold" HorizontalAlignment="Right"/>
+                </Grid>
+                <Canvas Width="442" Height="34" ClipToBounds="True" Margin="0,3,0,4" HorizontalAlignment="Left">
+                  <Canvas x:Name="ramPlot" Width="442" Height="34">
+                    <Canvas.RenderTransform><TranslateTransform X="0"/></Canvas.RenderTransform>
+                    <Polygon x:Name="ramArea" Fill="#2EBF5AF2"/>
+                    <Polyline x:Name="ramLine" Stroke="#BF5AF2" StrokeThickness="1.8" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                  </Canvas>
+                </Canvas>
+                <TextBlock x:Name="ramSub" Text="" Style="{StaticResource CardTxt}" FontSize="10.5" TextTrimming="CharacterEllipsis"/>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </Grid>
+
+        <!-- weather -->
+        <Grid x:Name="mWeather" Visibility="Hidden" Margin="32,66,32,20" RenderTransformOrigin="0.5,0">
+          <Grid.RenderTransform><TranslateTransform Y="0"/></Grid.RenderTransform>
+          <StackPanel VerticalAlignment="Center">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+              <Viewbox Width="56" Height="56" VerticalAlignment="Center">
+                <Canvas Width="24" Height="24"><Path x:Name="wIco" Style="{StaticResource WxIco}" Data="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></Canvas>
+              </Viewbox>
+              <TextBlock x:Name="wTemp" Text="—°" Foreground="White" FontSize="56" FontWeight="Light" VerticalAlignment="Center" Margin="12,0,0,0"/>
+              <StackPanel VerticalAlignment="Center" Margin="14,0,0,0">
+                <TextBlock x:Name="wCity" Text="…" Foreground="White" FontSize="15" FontWeight="SemiBold"/>
+                <TextBlock x:Name="wFeels" Text="Ощущается как —°" Style="{StaticResource CardTxt}" FontSize="11.5" Margin="0,3,0,0"/>
+                <TextBlock x:Name="wHum" Text="Влажность —% · Ветер — км/ч" Style="{StaticResource CardTxt}" FontSize="11.5" Margin="0,2,0,0"/>
+              </StackPanel>
+            </StackPanel>
+            <UniformGrid Columns="3" Margin="0,26,0,0">
+              <Border Background="#16FFFFFF" BorderBrush="#18FFFFFF" BorderThickness="1" CornerRadius="18" Margin="0,0,8,0" Padding="0,14">
+                <StackPanel>
+                  <TextBlock x:Name="wd1d" Text="" Style="{StaticResource CardTxt}" FontSize="11" HorizontalAlignment="Center"/>
+                  <Viewbox Width="28" Height="28" Margin="0,7,0,7"><Canvas Width="24" Height="24"><Path x:Name="wd1i" Style="{StaticResource WxIco}"/></Canvas></Viewbox>
+                  <TextBlock x:Name="wd1t" Text="" Foreground="White" FontSize="12.5" HorizontalAlignment="Center"/>
+                </StackPanel>
+              </Border>
+              <Border Background="#16FFFFFF" BorderBrush="#18FFFFFF" BorderThickness="1" CornerRadius="18" Margin="0,0,8,0" Padding="0,14">
+                <StackPanel>
+                  <TextBlock x:Name="wd2d" Text="" Style="{StaticResource CardTxt}" FontSize="11" HorizontalAlignment="Center"/>
+                  <Viewbox Width="28" Height="28" Margin="0,7,0,7"><Canvas Width="24" Height="24"><Path x:Name="wd2i" Style="{StaticResource WxIco}"/></Canvas></Viewbox>
+                  <TextBlock x:Name="wd2t" Text="" Foreground="White" FontSize="12.5" HorizontalAlignment="Center"/>
+                </StackPanel>
+              </Border>
+              <Border Background="#16FFFFFF" BorderBrush="#18FFFFFF" BorderThickness="1" CornerRadius="18" Padding="0,14">
+                <StackPanel>
+                  <TextBlock x:Name="wd3d" Text="" Style="{StaticResource CardTxt}" FontSize="11" HorizontalAlignment="Center"/>
+                  <Viewbox Width="28" Height="28" Margin="0,7,0,7"><Canvas Width="24" Height="24"><Path x:Name="wd3i" Style="{StaticResource WxIco}"/></Canvas></Viewbox>
+                  <TextBlock x:Name="wd3t" Text="" Foreground="White" FontSize="12.5" HorizontalAlignment="Center"/>
+                </StackPanel>
+              </Border>
+            </UniformGrid>
+          </StackPanel>
+        </Grid>
+
+        <!-- appearance -->
+        <Grid x:Name="mView" Visibility="Hidden" Margin="32,66,32,20" RenderTransformOrigin="0.5,0">
+          <Grid.RenderTransform><TranslateTransform Y="0"/></Grid.RenderTransform>
+          <StackPanel>
+            <TextBlock Text="АКЦЕНТНЫЙ ЦВЕТ" Style="{StaticResource SecLabel}"/>
+            <WrapPanel x:Name="dotsHost" Margin="0,0,0,8"/>
+            <Border x:Name="colPrev" Height="8" CornerRadius="4" Background="#F2F2F2"/>
+            <TextBlock Text="Цвет эквалайзера, прогресса и подсветки" Foreground="#70FFFFFF" FontSize="10.5" Margin="0,6,0,0"/>
+            <TextBlock Text="LIQUID GLASS" Style="{StaticResource SecLabel}" Margin="0,24,0,10"/>
+            <Grid Margin="0,0,0,12">
+              <TextBlock Text="Жидкое стекло (размытие фона)" Style="{StaticResource RowTxt}"/>
+              <ToggleButton x:Name="swGlass" Style="{StaticResource Switch}" HorizontalAlignment="Right"/>
+            </Grid>
+            <Grid>
+              <TextBlock Text="Прозрачность" Style="{StaticResource RowTxt}"/>
+              <Grid x:Name="alHit" Width="190" Height="28" Background="Transparent" Cursor="Hand" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <Border x:Name="alTrack" Height="6" CornerRadius="5" Background="#33FFFFFF" VerticalAlignment="Center" IsHitTestVisible="False"/>
+                <Border x:Name="alFill" Height="6" CornerRadius="5" Background="#F2F2F2" HorizontalAlignment="Left" VerticalAlignment="Center" Width="0" IsHitTestVisible="False"/>
+                <Ellipse x:Name="alKnob" Width="14" Height="14" Fill="#FFFFFF" HorizontalAlignment="Left" VerticalAlignment="Center" Opacity="0" RenderTransformOrigin="0.5,0.5" IsHitTestVisible="False">
+                  <Ellipse.RenderTransform><TransformGroup><ScaleTransform ScaleX="0.5" ScaleY="0.5"/><TranslateTransform X="0"/></TransformGroup></Ellipse.RenderTransform>
+                  <Ellipse.Effect><DropShadowEffect BlurRadius="5" ShadowDepth="1" Opacity="0.4"/></Ellipse.Effect>
+                </Ellipse>
+                <Border x:Name="alTip" Opacity="0" IsHitTestVisible="False" Background="#EE1C1C22" BorderBrush="#2EFFFFFF" BorderThickness="1" CornerRadius="9" Width="50" Height="22" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,-27,0,0">
+                  <Border.RenderTransform><TranslateTransform X="0"/></Border.RenderTransform>
+                  <TextBlock x:Name="alTipTxt" Text="0:00" Foreground="White" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+              </Grid>
+            </Grid>
+          </StackPanel>
+        </Grid>
+
+        <!-- more -->
+        <Grid x:Name="mMore" Visibility="Hidden" Margin="32,66,32,20" RenderTransformOrigin="0.5,0">
+          <Grid.RenderTransform><TranslateTransform Y="0"/></Grid.RenderTransform>
+          <StackPanel>
+            <TextBlock Text="ТАЙМЕР" Style="{StaticResource SecLabel}"/>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,18">
+              <Button x:Name="t1"  Style="{StaticResource PillBtn}" Content="1 мин"/>
+              <Button x:Name="t5"  Style="{StaticResource PillBtn}" Content="5 мин"/>
+              <Button x:Name="t10" Style="{StaticResource PillBtn}" Content="10 мин"/>
+              <Button x:Name="t25" Style="{StaticResource PillBtn}" Content="25 мин"/>
+              <Button x:Name="t45" Style="{StaticResource PillBtn}" Content="45 мин"/>
+            </StackPanel>
+            <TextBlock Text="НАСТРОЙКИ" Style="{StaticResource SecLabel}"/>
+            <Grid Margin="0,0,0,10"><TextBlock Text="Автозапуск с Windows" Style="{StaticResource RowTxt}"/><ToggleButton x:Name="swAuto" Style="{StaticResource Switch}" HorizontalAlignment="Right"/></Grid>
+            <Grid Margin="0,0,0,10"><TextBlock Text="Эквалайзер в пилюле" Style="{StaticResource RowTxt}"/><ToggleButton x:Name="swEq" Style="{StaticResource Switch}" HorizontalAlignment="Right"/></Grid>
+            <Grid Margin="0,0,0,10"><TextBlock Text="Показывать зарядку" Style="{StaticResource RowTxt}"/><ToggleButton x:Name="swCharge" Style="{StaticResource Switch}" HorizontalAlignment="Right"/></Grid>
+            <Grid Margin="0,0,0,10"><TextBlock Text="Прятаться в полноэкранном режиме" Style="{StaticResource RowTxt}"/><ToggleButton x:Name="swFull" Style="{StaticResource Switch}" HorizontalAlignment="Right"/></Grid>
+            <Grid Margin="0,0,0,16"><TextBlock Text="Часы при наведении" Style="{StaticResource RowTxt}"/><ToggleButton x:Name="swClock" Style="{StaticResource Switch}" HorizontalAlignment="Right"/></Grid>
+            <Button x:Name="btnQuit" Style="{StaticResource PillBtn}" Content="Выключить островок" Background="#4DFF453A" Foreground="#FFB4AB" HorizontalAlignment="Left" Margin="0"/>
+          </StackPanel>
+        </Grid>
+
+        <!-- running timer -->
+        <Grid x:Name="mTimerRun" Visibility="Hidden" Margin="32,66,32,20" RenderTransformOrigin="0.5,0">
+          <Grid.RenderTransform><TranslateTransform Y="0"/></Grid.RenderTransform>
+          <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+            <TextBlock x:Name="xTimerBig" Text="5:00" Foreground="White" FontSize="56" FontWeight="Light" HorizontalAlignment="Center"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,18,0,0">
+              <Button x:Name="btnPause" Style="{StaticResource PillBtn}" Content="Пауза"/>
+              <Button x:Name="btnStop" Style="{StaticResource PillBtn}" Content="Стоп" Background="#4DFF453A" Foreground="#FFB4AB" Margin="0"/>
+            </StackPanel>
+          </StackPanel>
+        </Grid>
+
+        <Button x:Name="btnX" Style="{StaticResource IcoBtn}" Background="#26FFFFFF" Width="26" Height="26" Margin="0,16,18,0" HorizontalAlignment="Right" VerticalAlignment="Top">
+          <Path Data="M0 0 L8 8 M8 0 L0 8" Stroke="White" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Width="9" Stretch="Uniform"/>
+        </Button>
+      </Grid>
+
+      <!-- ================= GLASS FINISH (above content) ================= -->
+      <Border x:Name="Spec" IsHitTestVisible="False">
+        <Border.Background>
+          <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
+            <GradientStop Color="#34FFFFFF" Offset="0"/>
+            <GradientStop Color="#0CFFFFFF" Offset="0.32"/>
+            <GradientStop Color="#00FFFFFF" Offset="0.6"/>
+            <GradientStop Color="#10FFFFFF" Offset="1"/>
+          </LinearGradientBrush>
+        </Border.Background>
+      </Border>
+
+      <Canvas x:Name="sweepLight" IsHitTestVisible="False" Opacity="0">
+        <Rectangle Width="130" Height="640" Canvas.Top="-80">
+          <Rectangle.RenderTransform>
+            <TransformGroup>
+              <RotateTransform Angle="16"/>
+              <TranslateTransform x:Name="sweepX" X="-260"/>
+            </TransformGroup>
+          </Rectangle.RenderTransform>
+          <Rectangle.Fill>
+            <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+              <GradientStop Color="#00FFFFFF" Offset="0"/>
+              <GradientStop Color="#58FFFFFF" Offset="0.5"/>
+              <GradientStop Color="#00FFFFFF" Offset="1"/>
+            </LinearGradientBrush>
+          </Rectangle.Fill>
+        </Rectangle>
+      </Canvas>
+
+      <!-- inner lip + rim light -->
+      <Border x:Name="RimGlow" IsHitTestVisible="False" BorderThickness="3" CornerRadius="17" Margin="0">
+        <Border.BorderBrush>
+          <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+            <GradientStop Color="#2EFFFFFF" Offset="0"/>
+            <GradientStop Color="#08FFFFFF" Offset="0.45"/>
+            <GradientStop Color="#18FFFFFF" Offset="1"/>
+          </LinearGradientBrush>
+        </Border.BorderBrush>
+        <Border.Effect><BlurEffect Radius="3.5" KernelType="Gaussian"/></Border.Effect>
+      </Border>
+      <Border x:Name="Rim" IsHitTestVisible="False" BorderThickness="1.1" CornerRadius="17">
+        <Border.BorderBrush>
+          <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+            <GradientStop Color="#B8FFFFFF" Offset="0"/>
+            <GradientStop Color="#34FFFFFF" Offset="0.28"/>
+            <GradientStop Color="#0EFFFFFF" Offset="0.55"/>
+            <GradientStop Color="#2CFFFFFF" Offset="0.82"/>
+            <GradientStop Color="#78FFFFFF" Offset="1"/>
+          </LinearGradientBrush>
+        </Border.BorderBrush>
+      </Border>
+    </Grid>
+  </Canvas>
+</Window>

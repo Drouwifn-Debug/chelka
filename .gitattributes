@@ -1,0 +1,7 @@
+# keep the exact bytes: the PowerShell files need UTF-8 BOM + CRLF, the launchers need CRLF
+*.ps1 -text
+*.cs -text
+*.xaml -text
+*.bat -text
+*.vbs -text
+*.txt -text
