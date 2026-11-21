@@ -1,6 +1,6 @@
 ﻿# ============================================================
 #  Background worker (own runspace): media session (SMTC), battery,
-#  clipboard history, weather.  Talks to the UI only through $sync.
+#  clipboard history.  Talks to the UI only through $sync.
 # ============================================================
 $ErrorActionPreference = 'Continue'
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
@@ -28,7 +28,7 @@ function Get-ClipboardTextSafe {
           if ($p -ne [IntPtr]::Zero) {
             $s = [Runtime.InteropServices.Marshal]::PtrToStringUni($p)
             $null = [Win32.Clip]::GlobalUnlock($h)
-            if ($s -and $s.Length -gt 300) { $s = $s.Substring(0, 300) }
+            if ($s -and $s.Length -gt 600) { $s = $s.Substring(0, 600) }
             return $s
           }
         }
@@ -136,102 +136,6 @@ function Get-Tint([byte[]]$bytes) {
   } catch { return $null }
 }
 
-# ---------- weather ----------
-$inv = [Globalization.CultureInfo]::InvariantCulture
-function Get-Json([string]$url) {
-  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-  $wc = New-Object System.Net.WebClient
-  $wc.Encoding = [Text.Encoding]::UTF8
-  $wc.Headers.Add('User-Agent', 'DynamicIsland/2.0 (desktop widget)')
-  return ($wc.DownloadString($url) | ConvertFrom-Json)
-}
-# WMO weather code -> icon key
-function WmoKey([int]$c, [bool]$day) {
-  if ($c -eq 0 -or $c -eq 1) { if ($day) { return 'sun' } else { return 'moon' } }
-  if ($c -eq 2) { return 'pcloud' }
-  if ($c -eq 3) { return 'cloud' }
-  if ($c -eq 45 -or $c -eq 48) { return 'fog' }
-  if ($c -ge 51 -and $c -le 57) { return 'drizzle' }
-  if (($c -ge 61 -and $c -le 67) -or ($c -ge 80 -and $c -le 82)) { return 'rain' }
-  if (($c -ge 71 -and $c -le 77) -or $c -eq 85 -or $c -eq 86) { return 'snow' }
-  if ($c -ge 95) { return 'storm' }
-  return 'cloud'
-}
-# wttr.in (WWO) code -> icon key
-function WwoKey([int]$c) {
-  if ($c -eq 113) { return 'sun' }
-  if ($c -eq 116) { return 'pcloud' }
-  if ($c -eq 119 -or $c -eq 122) { return 'cloud' }
-  if ($c -in 143, 248, 260) { return 'fog' }
-  if ($c -in 200, 386, 389, 392, 395) { return 'storm' }
-  if ($c -in 179, 182, 185, 227, 230, 317, 320, 323, 326, 329, 332, 335, 338, 350, 368, 371, 374, 377) { return 'snow' }
-  if ($c -in 263, 266, 281, 284) { return 'drizzle' }
-  return 'rain'
-}
-function Get-Geo([string]$city) {
-  if ($city) {
-    try {
-      $r = Get-Json ('https://geocoding-api.open-meteo.com/v1/search?name=' + [uri]::EscapeDataString($city) + '&count=1&language=ru&format=json')
-      if ($r.results -and $r.results.Count -gt 0) {
-        return @{ lat = [double]$r.results[0].latitude; lon = [double]$r.results[0].longitude; city = [string]$r.results[0].name }
-      }
-    } catch { WLog "geocode failed: $($_.Exception.Message)" }
-  }
-  try {
-    $g = Get-Json 'https://ipwho.is/?lang=ru'
-    if ($g.latitude) { return @{ lat = [double]$g.latitude; lon = [double]$g.longitude; city = [string]$g.city } }
-  } catch { WLog "ipwho.is failed: $($_.Exception.Message)" }
-  try {
-    $g = Get-Json 'https://ipapi.co/json/'
-    if ($g.latitude) { return @{ lat = [double]$g.latitude; lon = [double]$g.longitude; city = [string]$g.city } }
-  } catch { WLog "ipapi.co failed: $($_.Exception.Message)" }
-  return $null
-}
-function Get-DayName([datetime]$dt, [int]$i) {
-  if ($i -eq 0) { return 'Сегодня' }
-  if ($i -eq 1) { return 'Завтра' }
-  $n = [Globalization.CultureInfo]::GetCultureInfo('ru-RU').DateTimeFormat.GetAbbreviatedDayName($dt.DayOfWeek)
-  return ($n.Substring(0, 1).ToUpper() + $n.Substring(1))
-}
-function Get-Weather([string]$cityOverride) {
-  $geo = Get-Geo $cityOverride
-  if (-not $geo) { return $null }
-  $lat = $geo.lat.ToString('0.####', $inv); $lon = $geo.lon.ToString('0.####', $inv)
-  try {
-    $u = 'https://api.open-meteo.com/v1/forecast?latitude=' + $lat + '&longitude=' + $lon +
-         '&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,is_day' +
-         '&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=3&wind_speed_unit=kmh'
-    $w = Get-Json $u
-    $cur = $w.current
-    $days = @()
-    for ($d = 0; $d -lt 3; $d++) {
-      $dt = [datetime]::ParseExact([string]$w.daily.time[$d], 'yyyy-MM-dd', $inv)
-      $days += ,@{ d = (Get-DayName $dt $d); icon = (WmoKey ([int]$w.daily.weather_code[$d]) $true); hi = [int][Math]::Round([double]$w.daily.temperature_2m_max[$d]); lo = [int][Math]::Round([double]$w.daily.temperature_2m_min[$d]) }
-    }
-    return @{
-      ok = $true; city = $geo.city
-      temp = [int][Math]::Round([double]$cur.temperature_2m); feels = [int][Math]::Round([double]$cur.apparent_temperature)
-      hum = [int]$cur.relative_humidity_2m; wind = [int][Math]::Round([double]$cur.wind_speed_10m)
-      icon = (WmoKey ([int]$cur.weather_code) ([bool]([int]$cur.is_day -eq 1))); days = $days
-    }
-  } catch { WLog "open-meteo failed: $($_.Exception.Message)" }
-  try {
-    $wx = Get-Json ('https://wttr.in/' + $lat + ',' + $lon + '?format=j1')
-    $cc = $wx.current_condition[0]
-    $days = @()
-    for ($d = 0; $d -lt 3; $d++) {
-      $dt = [datetime]::ParseExact([string]$wx.weather[$d].date, 'yyyy-MM-dd', $inv)
-      $days += ,@{ d = (Get-DayName $dt $d); icon = (WwoKey ([int]$wx.weather[$d].hourly[4].weatherCode)); hi = [int]$wx.weather[$d].maxtempC; lo = [int]$wx.weather[$d].mintempC }
-    }
-    return @{
-      ok = $true; city = $geo.city
-      temp = [int]$cc.temp_C; feels = [int]$cc.FeelsLikeC; hum = [int]$cc.humidity; wind = [int]$cc.windspeedKmph
-      icon = (WwoKey ([int]$cc.weatherCode)); days = $days
-    }
-  } catch { WLog "wttr.in failed: $($_.Exception.Message)" }
-  return $null
-}
-
 # ---------- cover art lookups on the internet run in their OWN runspace ----------
 # (a slow Deezer/iTunes request must never delay play/pause/track-change updates)
 function Get-FnText([string]$n) { return ('function ' + $n + " {`n" + (Get-Item ('function:' + $n)).ScriptBlock.ToString() + "`n}`n") }
@@ -265,7 +169,6 @@ try {
 $clipHist = New-Object 'System.Collections.Generic.List[string]'
 $lastClip = ''
 $lastSeq = [uint32]0
-$wxLoadedAt = 0
 $wlp = 0.0; $wlpAt = 0; $wTitle = ''; $wfrz = $false; $wfrzAt = 0.0; $pPrev = -1.0
 $artCache = @{}
 $artFail = @{}
@@ -418,26 +321,13 @@ while ($sync.Running) {
             $sync.Clip = $clipHist.ToArray()
           } else {
             $clipHist.Insert(0, $c)
-            while ($clipHist.Count -gt 6) { $clipHist.RemoveAt($clipHist.Count - 1) }
+            while ($clipHist.Count -gt 40) { $clipHist.RemoveAt($clipHist.Count - 1) }
             $sync.Clip = $clipHist.ToArray()
           }
         }
       }
     }
   } catch { WLog "clipboard: $($_.Exception.Message)" }
-
-  # ---- weather: every 30 min, or when the UI asks for a refresh ----
-  if ($sync.WxRefresh) { $wxLoadedAt = 0; $sync.WxRefresh = $false }
-  if ($nowMs - $wxLoadedAt -gt 1800000) {
-    $wxLoadedAt = $nowMs
-    $res = $null
-    try { $res = Get-Weather ([string]$sync.City) } catch { WLog "weather: $($_.Exception.Message)" }
-    if ($res) { $sync.Weather = $res }
-    else {
-      if (-not $sync.Weather) { $sync.Weather = @{ ok = $false } }
-      $wxLoadedAt = $nowMs - 1500000   # retry in ~5 minutes
-    }
-  }
 
   $sync.State = $st
   Start-Sleep -Milliseconds 100

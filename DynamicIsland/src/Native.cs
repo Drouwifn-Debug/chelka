@@ -136,6 +136,14 @@ namespace DI
         public static int CursorX() { POINT p; GetCursorPos(out p); return p.X; }
         public static int CursorY() { POINT p; GetCursorPos(out p); return p.Y; }
         public static bool LeftDown() { return (GetAsyncKeyState(0x01) & 0x8000) != 0; }
+        public static bool KeyDown(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
+
+        // press a chord like Win+Shift+S : vks in order, held, released in reverse
+        public static void Chord(byte[] vks)
+        {
+            for (int i = 0; i < vks.Length; i++) keybd_event(vks[i], 0, 0, UIntPtr.Zero);
+            for (int i = vks.Length - 1; i >= 0; i--) keybd_event(vks[i], 0, 2, UIntPtr.Zero);
+        }
 
         // true when a full-screen app / game / presentation owns the screen
         public static bool FullscreenBusy()
@@ -165,35 +173,35 @@ namespace DI
     [Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     interface IAudioEndpointVolume
     {
-        int RegisterControlChangeNotify(IntPtr p);
-        int UnregisterControlChangeNotify(IntPtr p);
-        int GetChannelCount(out uint c);
-        int SetMasterVolumeLevel(float l, ref Guid ctx);
-        int SetMasterVolumeLevelScalar(float l, ref Guid ctx);
-        int GetMasterVolumeLevel(out float l);
-        int GetMasterVolumeLevelScalar(out float l);
-        int SetChannelVolumeLevel(uint ch, float l, ref Guid ctx);
-        int SetChannelVolumeLevelScalar(uint ch, float l, ref Guid ctx);
-        int GetChannelVolumeLevel(uint ch, out float l);
-        int GetChannelVolumeLevelScalar(uint ch, out float l);
-        int SetMute([MarshalAs(UnmanagedType.Bool)] bool m, ref Guid ctx);
-        int GetMute([MarshalAs(UnmanagedType.Bool)] out bool m);
+        [PreserveSig] int RegisterControlChangeNotify(IntPtr p);
+        [PreserveSig] int UnregisterControlChangeNotify(IntPtr p);
+        [PreserveSig] int GetChannelCount(out uint c);
+        [PreserveSig] int SetMasterVolumeLevel(float l, ref Guid ctx);
+        [PreserveSig] int SetMasterVolumeLevelScalar(float l, ref Guid ctx);
+        [PreserveSig] int GetMasterVolumeLevel(out float l);
+        [PreserveSig] int GetMasterVolumeLevelScalar(out float l);
+        [PreserveSig] int SetChannelVolumeLevel(uint ch, float l, ref Guid ctx);
+        [PreserveSig] int SetChannelVolumeLevelScalar(uint ch, float l, ref Guid ctx);
+        [PreserveSig] int GetChannelVolumeLevel(uint ch, out float l);
+        [PreserveSig] int GetChannelVolumeLevelScalar(uint ch, out float l);
+        [PreserveSig] int SetMute([MarshalAs(UnmanagedType.Bool)] bool m, ref Guid ctx);
+        [PreserveSig] int GetMute([MarshalAs(UnmanagedType.Bool)] out bool m);
     }
 
     [Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     interface IMMDevice
     {
-        int Activate(ref Guid iid, int clsCtx, IntPtr pars, out IAudioEndpointVolume ep);
+        [PreserveSig] int Activate(ref Guid iid, int clsCtx, IntPtr pars, [MarshalAs(UnmanagedType.IUnknown)] out object ep);
     }
 
     [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     interface IMMDeviceEnumerator
     {
-        int EnumAudioEndpoints(int flow, int mask, out IntPtr devs);
-        int GetDefaultAudioEndpoint(int flow, int role, out IMMDevice dev);
+        [PreserveSig] int EnumAudioEndpoints(int flow, int mask, out IntPtr devs);
+        [PreserveSig] int GetDefaultAudioEndpoint(int flow, int role, out IMMDevice dev);
     }
 
-    [ComImport, Guid("BCDE0395-E52F-46B3-9D01-CE4FD1B4D5AD")]
+    [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
     class MMDeviceEnumeratorComObject { }
 
     public static class Vol
@@ -210,8 +218,9 @@ namespace DI
             IMMDevice dev;
             Marshal.ThrowExceptionForHR(en.GetDefaultAudioEndpoint(0, 1, out dev));
             Guid iid = typeof(IAudioEndpointVolume).GUID;
-            IAudioEndpointVolume ep;
-            Marshal.ThrowExceptionForHR(dev.Activate(ref iid, 23, IntPtr.Zero, out ep));
+            object epo;
+            Marshal.ThrowExceptionForHR(dev.Activate(ref iid, 23, IntPtr.Zero, out epo));
+            IAudioEndpointVolume ep = (IAudioEndpointVolume)epo;
             cached = ep;
             cachedAt = now;
             return ep;
@@ -289,6 +298,181 @@ namespace DI
                 catch (Exception ex) { LastError = ex.Message; Drop(); }
             }
             return -1;
+        }
+    }
+
+
+    // ---------------- per-application volume (Core Audio sessions) ----------------
+    [Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IAudioSessionManager2
+    {
+        [PreserveSig] int GetAudioSessionControl(ref Guid g, uint flags, out IntPtr c);
+        [PreserveSig] int GetSimpleAudioVolume(ref Guid g, uint flags, out IntPtr v);
+        [PreserveSig] int GetSessionEnumerator(out IAudioSessionEnumerator e);
+    }
+
+    [Guid("E2F5BB11-0570-40CA-ACDD-3AA01277DEE8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IAudioSessionEnumerator
+    {
+        [PreserveSig] int GetCount(out int n);
+        [PreserveSig] int GetSession(int i, [MarshalAs(UnmanagedType.IUnknown)] out object s);
+    }
+
+    [Guid("BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IAudioSessionControl2
+    {
+        [PreserveSig] int GetState(out int s);
+        [PreserveSig] int GetDisplayName([MarshalAs(UnmanagedType.LPWStr)] out string n);
+        [PreserveSig] int SetDisplayName([MarshalAs(UnmanagedType.LPWStr)] string n, ref Guid c);
+        [PreserveSig] int GetIconPath([MarshalAs(UnmanagedType.LPWStr)] out string p);
+        [PreserveSig] int SetIconPath([MarshalAs(UnmanagedType.LPWStr)] string p, ref Guid c);
+        [PreserveSig] int GetGroupingParam(out Guid g);
+        [PreserveSig] int SetGroupingParam(ref Guid g, ref Guid c);
+        [PreserveSig] int RegisterAudioSessionNotification(IntPtr p);
+        [PreserveSig] int UnregisterAudioSessionNotification(IntPtr p);
+        [PreserveSig] int GetSessionIdentifier([MarshalAs(UnmanagedType.LPWStr)] out string id);
+        [PreserveSig] int GetSessionInstanceIdentifier([MarshalAs(UnmanagedType.LPWStr)] out string id);
+        [PreserveSig] int GetProcessId(out uint pid);
+        [PreserveSig] int IsSystemSoundsSession();
+        [PreserveSig] int SetDuckingPreference([MarshalAs(UnmanagedType.Bool)] bool d);
+    }
+
+    [Guid("87CE5498-68D6-44E5-9215-6DA47EF883D8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface ISimpleAudioVolume
+    {
+        [PreserveSig] int SetMasterVolume(float v, ref Guid c);
+        [PreserveSig] int GetMasterVolume(out float v);
+        [PreserveSig] int SetMute([MarshalAs(UnmanagedType.Bool)] bool m, ref Guid c);
+        [PreserveSig] int GetMute([MarshalAs(UnmanagedType.Bool)] out bool m);
+    }
+
+    public class MixItem
+    {
+        public string Name;     // process name (grouped), or "" for system sounds
+        public uint Pid;        // one of the pids
+        public float Vol;
+        public bool Muted;
+        public bool Active;     // audio is playing right now
+        public bool System;
+    }
+
+    public static class Mixer
+    {
+        public static string LastError = "";
+
+        static IAudioSessionManager2 Manager()
+        {
+            IMMDeviceEnumerator en = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
+            IMMDevice dev;
+            Marshal.ThrowExceptionForHR(en.GetDefaultAudioEndpoint(0, 1, out dev));
+            Guid iid = typeof(IAudioSessionManager2).GUID;
+            object o;
+            Marshal.ThrowExceptionForHR(dev.Activate(ref iid, 23, IntPtr.Zero, out o));
+            return (IAudioSessionManager2)o;
+        }
+
+        static string ProcName(uint pid)
+        {
+            try { return System.Diagnostics.Process.GetProcessById((int)pid).ProcessName; }
+            catch { return ""; }
+        }
+
+        static System.Collections.Generic.List<object> Sessions()
+        {
+            System.Collections.Generic.List<object> res = new System.Collections.Generic.List<object>();
+            IAudioSessionManager2 m = Manager();
+            IAudioSessionEnumerator en;
+            Marshal.ThrowExceptionForHR(m.GetSessionEnumerator(out en));
+            int n;
+            Marshal.ThrowExceptionForHR(en.GetCount(out n));
+            for (int i = 0; i < n; i++)
+            {
+                object s;
+                if (en.GetSession(i, out s) == 0 && s != null) res.Add(s);
+            }
+            return res;
+        }
+
+        // one row per application (all its sessions merged), sorted: playing first, then by name
+        public static MixItem[] List()
+        {
+            try
+            {
+                System.Collections.Generic.Dictionary<string, MixItem> map = new System.Collections.Generic.Dictionary<string, MixItem>();
+                System.Collections.Generic.List<MixItem> order = new System.Collections.Generic.List<MixItem>();
+                foreach (object s in Sessions())
+                {
+                    try
+                    {
+                        IAudioSessionControl2 c = (IAudioSessionControl2)s;
+                        ISimpleAudioVolume v = (ISimpleAudioVolume)s;
+                        int st; c.GetState(out st);
+                        if (st == 2) continue;   // expired
+                        uint pid; c.GetProcessId(out pid);
+                        bool sys = c.IsSystemSoundsSession() == 0;
+                        string name = sys ? "" : ProcName(pid);
+                        if (!sys && name.Length == 0) continue;
+                        float vol; v.GetMasterVolume(out vol);
+                        bool mu; v.GetMute(out mu);
+                        string key = sys ? "\u0001sys" : name.ToLowerInvariant();
+                        MixItem it;
+                        if (!map.TryGetValue(key, out it))
+                        {
+                            it = new MixItem(); it.Name = name; it.Pid = pid; it.Vol = vol; it.Muted = mu; it.System = sys;
+                            map[key] = it; order.Add(it);
+                        }
+                        else { if (vol > it.Vol) it.Vol = vol; if (!mu) it.Muted = false; }
+                        if (st == 1) it.Active = true;
+                    }
+                    catch (Exception ex) { LastError = ex.Message; }
+                }
+                order.Sort(delegate(MixItem a, MixItem b)
+                {
+                    if (a.System != b.System) return a.System ? 1 : -1;
+                    if (a.Active != b.Active) return a.Active ? -1 : 1;
+                    return string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+                });
+                return order.ToArray();
+            }
+            catch (Exception ex) { LastError = ex.Message; return new MixItem[0]; }
+        }
+
+        // name = process name ("" = system sounds). Applies to every session of that application.
+        public static int SetVol(string name, float v)
+        {
+            return Apply(name, v, false, true);
+        }
+        public static int SetMute(string name, bool m)
+        {
+            return Apply(name, 0f, m, false);
+        }
+
+        static int Apply(string name, float vol, bool mute, bool isVol)
+        {
+            int hit = 0;
+            try
+            {
+                if (vol < 0f) vol = 0f;
+                if (vol > 1f) vol = 1f;
+                Guid g = Guid.Empty;
+                foreach (object s in Sessions())
+                {
+                    try
+                    {
+                        IAudioSessionControl2 c = (IAudioSessionControl2)s;
+                        ISimpleAudioVolume sv = (ISimpleAudioVolume)s;
+                        uint pid; c.GetProcessId(out pid);
+                        bool sys = c.IsSystemSoundsSession() == 0;
+                        bool match = (name.Length == 0) ? sys : (!sys && string.Equals(ProcName(pid), name, StringComparison.OrdinalIgnoreCase));
+                        if (!match) continue;
+                        int hr = isVol ? sv.SetMasterVolume(vol, ref g) : sv.SetMute(mute, ref g);
+                        if (hr == 0) hit++;
+                    }
+                    catch (Exception ex) { LastError = ex.Message; }
+                }
+            }
+            catch (Exception ex) { LastError = ex.Message; return -1; }
+            return hit > 0 ? 0 : -2;
         }
     }
 
