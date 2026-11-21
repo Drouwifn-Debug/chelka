@@ -1,8 +1,8 @@
 ﻿# ============================================================
-#  Dynamic Island for Windows  v2.3   (PowerShell 5.1 + WPF, no dependencies)
+#  Dynamic Island for Windows  v2.4   (PowerShell 5.1 + WPF, no dependencies)
 #  Liquid Glass pill: blurred snapshot of the screen behind it, clipped to the
-#  pill shape, spring morphing, music / sites / system load / clipboard /
-#  weather / timer / volume HUD / charging.
+#  pill shape, spring morphing, music + lyrics / to-do + calendar / weather /
+#  system load / sound mixer / clipboard / sites / file shelf / timer + pomodoro.
 # ============================================================
 param([switch]$Console)
 
@@ -26,7 +26,7 @@ trap {
   if ($Console) { Write-Host "Нажми Enter, чтобы закрыть..."; [void](Read-Host) }
   exit 1
 }
-Log "=== start v2.3  PS $($PSVersionTable.PSVersion)  dir=$ScriptDir"
+Log "=== start v2.4  PS $($PSVersionTable.PSVersion)  dir=$ScriptDir"
 
 # ---- single instance ----
 $script:mutex = New-Object System.Threading.Mutex($false, 'Global\DynamicIslandPS_v2')
@@ -52,6 +52,8 @@ $SetFile = Join-Path $DataDir 'settings.json'
 $cfg = @{
   accent = '242,242,242'; eq = $true; charge = $true; glass = $true; glassAlpha = 55
   hideFull = $true; hoverClock = $true; city = ''; favicons = $true
+  theme = 'auto'; hotkey = 'Ctrl+Alt+I'; icsUrl = ''
+  cities = @(); cityIdx = -1; pins = @(); shelf = @(); todos = @(); events = @()
   sites = @(
     @{ n = 'YouTube'; u = 'https://www.youtube.com' }
     @{ n = 'GitHub'; u = 'https://github.com' }
@@ -70,12 +72,38 @@ function Load-Settings {
     }
   } catch { Log "settings load failed: $($_.Exception.Message)" }
   $cfg.glassAlpha = [int][Math]::Min(100, [Math]::Max(0, [int]$cfg.glassAlpha))
-  # sites come back from JSON as objects: normalise them to plain hashtables
+  # lists come back from JSON as objects: normalise them to plain hashtables / strings
   $list = @()
   foreach ($x in @($cfg.sites)) {
     try { if ($x.u) { $list += , @{ n = [string]$x.n; u = [string]$x.u } } } catch {}
   }
   $cfg.sites = $list
+  $cities = @()
+  foreach ($x in @($cfg.cities)) {
+    try {
+      if ($x.n) {
+        $la = $null; $lo = $null
+        if ($null -ne $x.lat -and $null -ne $x.lon) { $la = [double]$x.lat; $lo = [double]$x.lon }
+        $cities += , @{ n = [string]$x.n; lat = $la; lon = $lo }
+      }
+    } catch {}
+  }
+  # an old single "city" setting becomes the first saved city
+  if ($cities.Count -eq 0 -and $cfg.city) { $cities += , @{ n = [string]$cfg.city; lat = $null; lon = $null } }
+  $cfg.cities = $cities
+  $cfg.cityIdx = [int]$cfg.cityIdx
+  if ($cfg.cityIdx -ge $cities.Count) { $cfg.cityIdx = -1 }
+  $cfg.pins = @(@($cfg.pins) | Where-Object { $_ } | ForEach-Object { [string]$_ })
+  $cfg.shelf = @(@($cfg.shelf) | Where-Object { $_ } | ForEach-Object { [string]$_ })
+  $td = @()
+  foreach ($x in @($cfg.todos)) { try { if ($x.t) { $td += , @{ id = [string]$x.id; t = [string]$x.t; d = [bool]$x.d } } } catch {} }
+  $cfg.todos = $td
+  $ev = @()
+  foreach ($x in @($cfg.events)) { try { if ($x.t -and $x.n) { $ev += , @{ t = [string]$x.t; n = [string]$x.n } } } catch {} }
+  $cfg.events = $ev
+  $cfg.theme = [string]$cfg.theme
+  $cfg.hotkey = [string]$cfg.hotkey
+  $cfg.icsUrl = [string]$cfg.icsUrl
 }
 function Save-Settings {
   try { ($cfg | ConvertTo-Json -Depth 6) | Set-Content -Path $SetFile -Encoding UTF8 }
@@ -94,9 +122,11 @@ Log "build=$build"
 #  Worker runspace  (src\Worker.ps1)
 # ============================================================
 $sync = [hashtable]::Synchronized(@{
-  Running = $true; State = $null; Clip = $null; Weather = $null
-  ClipWrite = ''; ClipClear = $false; Seek = -1.0; Cmd = ''; WxRefresh = $false; City = [string]$cfg.city
+  Running = $true; State = $null; Clip = $null
+  ClipWrite = ''; ClipClear = $false; Seek = -1.0; Cmd = ''
   SysOn = $false; Sys = $null
+  WxReq = $null; WxRes = [hashtable]::Synchronized(@{}); CityQ = $null; CityRes = $null
+  LyrReq = $null; Lyr = $null; IcsReq = $null; Ics = $null
   Log = (New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]')
 })
 $workerText = [IO.File]::ReadAllText((Join-Path $ScriptDir 'src\Worker.ps1'), [Text.Encoding]::UTF8)
@@ -107,6 +137,18 @@ $workerPs = [powershell]::Create()
 $workerPs.Runspace = $rs
 $null = $workerPs.AddScript($workerText)
 $null = $workerPs.BeginInvoke()
+
+# internet worker: weather, city search, lyrics, calendar. Slow requests must never block the media session.
+try {
+  $netText = [IO.File]::ReadAllText((Join-Path $ScriptDir 'src\Net.ps1'), [Text.Encoding]::UTF8)
+  $netRs = [runspacefactory]::CreateRunspace()
+  $netRs.Open()
+  $netRs.SessionStateProxy.SetVariable('sync', $sync)
+  $netPs = [powershell]::Create()
+  $netPs.Runspace = $netRs
+  $null = $netPs.AddScript($netText)
+  $null = $netPs.BeginInvoke()
+} catch { Log "net runspace failed: $($_.Exception.Message)" }
 
 # system load sampler (CPU / RAM / GPU): its own runspace, only works while the "Система" tab is open
 $sysText = [IO.File]::ReadAllText((Join-Path $ScriptDir 'src\Sys.ps1'), [Text.Encoding]::UTF8)
@@ -139,8 +181,10 @@ if (-not $E.shadowHole)  { $E.shadowHole  = $E.ShadowWrap.Clip.Geometry2 }
 if (-not $E.shadowFx)    { $E.shadowFx    = $E.ShadowShape.Effect }
 if (-not $E.expT)        { $E.expT        = $E.ExpandedLayer.RenderTransform }
 if (-not $E.sweepX)      { $E.sweepX      = $E.sweepLight.Children[0].RenderTransform.Children[1] }
-if (-not $E.washC0)      { $E.washC0      = $E.WashLayer.Background.GradientStops[0] }
-if (-not $E.washC1)      { $E.washC1      = $E.WashLayer.Background.GradientStops[1] }
+if (-not $E.washC0)      { $E.washC0      = $E.WashLayer.Children[0].Background.GradientStops[0] }
+if (-not $E.washC1)      { $E.washC1      = $E.WashLayer.Children[0].Background.GradientStops[1] }
+if (-not $E.washD0)      { $E.washD0      = $E.WashLayer.Children[1].Background.GradientStops[0] }
+if (-not $E.washD1)      { $E.washD1      = $E.WashLayer.Children[1].Background.GradientStops[1] }
 $miss = @($E.Keys | Where-Object { -not $E[$_] })
 if ($miss.Count -gt 0) { throw ("XAML elements not found: " + ($miss -join ', ')) }
 Log "xaml ok, $($E.Count) named objects"
@@ -165,16 +209,17 @@ $mainHwnd = $wih.EnsureHandle()
 # ============================================================
 #  Geometry, spring physics, glass (blurred backdrop), sliders
 # ============================================================
-$WIN_W = 720.0; $WIN_H = 580.0; $TOP = 10.0
+$WIN_W = 780.0; $WIN_H = 640.0; $TOP = 10.0
 $SIZES = @{
   idle      = @(116.0, 34.0, 17.0)
   idleHover = @(152.0, 34.0, 17.0)
   music     = @(248.0, 34.0, 17.0)
-  timer     = @(160.0, 34.0, 17.0)
+  timer     = @(176.0, 34.0, 17.0)
   charge    = @(150.0, 34.0, 17.0)
-  done      = @(150.0, 34.0, 17.0)
+  done      = @(210.0, 34.0, 17.0)
+  event     = @(260.0, 34.0, 17.0)
   vol       = @(220.0, 34.0, 17.0)
-  panel     = @(540.0, 440.0, 34.0)
+  panel     = @(660.0, 520.0, 36.0)
 }
 $clock = [Diagnostics.Stopwatch]::StartNew()
 function Now-Ms { return $clock.Elapsed.TotalMilliseconds }
@@ -197,6 +242,7 @@ $ui = @{
   closing = $false; reduceMotion = $false
   kbd = $false; prevFg = [IntPtr]::Zero; sitesEdit = $false; sysRef = $null; volErrLogged = $false
   lastLeft = $false; wxRef = $null; renderErr = 0
+  evtUntil = 0.0; evtText = ''; pomo = $false; pomoPhase = 'work'; pomoRound = 0
 }
 try { $ui.reduceMotion = -not [System.Windows.SystemParameters]::ClientAreaAnimation } catch {}
 try {
@@ -224,7 +270,7 @@ function Reposition {
 # Glass backdrop. The island grabs the screen behind its panel ONCE when it opens (the island is a layered
 # window, so the grab does not contain it), blurs it and paints it INSIDE the island under the tint. There is no
 # second window, so the glass follows the spring frame-perfectly and has no edges that could stick out.
-$BD_W = 540.0; $BD_H = 440.0
+$BD_W = 660.0; $BD_H = 520.0
 $script:bdT = $E.bdImg.RenderTransform
 function Capture-Backdrop([bool]$windowHidden = $false) {
   $ui.bdReady = $false
@@ -342,9 +388,28 @@ function Retarget([double]$resp = 0.40, [double]$zeta = 0.78) {
 $script:tintBrush = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromArgb(176, 14, 14, 18))
 $E.TintLayer.Background = $script:tintBrush
 $script:accBrush = New-Object System.Windows.Media.SolidColorBrush $ui.accent
+# glass themes: tint colour of the panel ('auto' = follows the album cover, or the accent colour)
+$THEMES = [ordered]@{
+  auto     = @('Авто', $null)
+  graphite = @('Графит', @(170, 170, 184))
+  ocean    = @('Океан', @(20, 120, 255))
+  sunset   = @('Закат', @(255, 110, 50))
+  forest   = @('Лес', @(40, 190, 105))
+  violet   = @('Фиалка', @(150, 85, 245))
+  rose     = @('Роза', @(255, 60, 125))
+}
+# the colour that tints the glass right now: theme > album cover > nothing (accent decides)
+function Get-BaseTint {
+  $th = $THEMES[[string]$cfg.theme]
+  if ($th -and $th[1]) { return $th[1] }
+  if ($ui.tint -and $ui.mode -eq 'music') { return $ui.tint }
+  if ($ui.tint -and $ui.expanded) { return $ui.tint }
+  return $null
+}
 function Set-PillTint([int]$ms = 320, [bool]$solid = $false) {
-  if ($ui.tint) {
-    $mr = [double]$ui.tint[0]; $mg = [double]$ui.tint[1]; $mb = [double]$ui.tint[2]; $k = 0.30
+  $bt = Get-BaseTint
+  if ($bt) {
+    $mr = [double]$bt[0]; $mg = [double]$bt[1]; $mb = [double]$bt[2]; $k = 0.30
   } else {
     $a = $ui.accent
     $mr = [double]$a.R; $mg = [double]$a.G; $mb = [double]$a.B
@@ -367,11 +432,17 @@ function Set-PillTint([int]$ms = 320, [bool]$solid = $false) {
   $ca.EasingFunction = $script:easeOut
   $script:tintBrush.BeginAnimation([System.Windows.Media.SolidColorBrush]::ColorProperty, $ca)
 }
+# the colour wash: two soft glows (top-left, bottom-right) so the WHOLE panel carries the colour
 function Set-Wash {
-  if ($ui.tint -and $ui.mode -eq 'music' -and $ui.glassOn) {
-    $E.washC0.Color = [System.Windows.Media.Color]::FromArgb(150, [byte]$ui.tint[0], [byte]$ui.tint[1], [byte]$ui.tint[2])
-    $E.washC1.Color = [System.Windows.Media.Color]::FromArgb(0, [byte]$ui.tint[0], [byte]$ui.tint[1], [byte]$ui.tint[2])
-    FadeTo $E.WashLayer 0.6 400
+  $bt = Get-BaseTint
+  $show = ($bt -and $ui.glassOn -and ($ui.expanded -or $ui.mode -eq 'music'))
+  if ($show) {
+    $r = [byte]$bt[0]; $g = [byte]$bt[1]; $b = [byte]$bt[2]
+    $E.washC0.Color = [System.Windows.Media.Color]::FromArgb(150, $r, $g, $b)
+    $E.washC1.Color = [System.Windows.Media.Color]::FromArgb(0, $r, $g, $b)
+    $E.washD0.Color = [System.Windows.Media.Color]::FromArgb(125, $r, $g, $b)
+    $E.washD1.Color = [System.Windows.Media.Color]::FromArgb(0, $r, $g, $b)
+    FadeTo $E.WashLayer $(if ($ui.expanded) { 0.72 } else { 0.6 }) 420
   } else { FadeTo $E.WashLayer 0.0 300 }
 }
 function Update-Glass {
@@ -453,6 +524,56 @@ function SwapPanel($from, $to, [int]$ms) {
     }
     $sb.Begin($to)
   }
+}
+
+
+# colour of a brush glides to another colour
+function Anim-Color($brush, [System.Windows.Media.Color]$to, [int]$ms = 240) {
+  $ca = New-Object System.Windows.Media.Animation.ColorAnimation
+  $ca.To = $to
+  $ca.Duration = New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds($ms))
+  $ca.EasingFunction = $script:easeOut
+  $brush.BeginAnimation([System.Windows.Media.SolidColorBrush]::ColorProperty, $ca)
+}
+# run a script block once, a little later (UI thread)
+function Later([int]$ms, [scriptblock]$sb) {
+  $tm = New-Object System.Windows.Threading.DispatcherTimer
+  $tm.Interval = [TimeSpan]::FromMilliseconds($ms)
+  $tm.Tag = $sb
+  $tm.Add_Tick({
+    param($snd, $ev)
+    $snd.Stop()
+    try { & $snd.Tag } catch { Log "later: $($_.Exception.Message)" }
+  })
+  $tm.Start()
+}
+# a row / tile / card slides up a few pixels while it fades in (the i-th item of a list is a bit later)
+function Pop-In($el, [int]$i = 0, [double]$dy = 9.0) {
+  if ($ui.reduceMotion) { return }
+  try {
+    $tt = $el.RenderTransform
+    if (-not ($tt -is [System.Windows.Media.TranslateTransform])) {
+      $tt = New-Object System.Windows.Media.TranslateTransform
+      $el.RenderTransform = $tt
+    }
+    $d = New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds(320))
+    $bt = [TimeSpan]::FromMilliseconds([Math]::Min(420, 34 * $i))
+    $el.Opacity = 0.0
+    $a = New-Object System.Windows.Media.Animation.DoubleAnimation
+    $a.From = 0.0; $a.To = 1.0; $a.Duration = $d; $a.BeginTime = $bt
+    $el.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $a)
+    $b = New-Object System.Windows.Media.Animation.DoubleAnimation
+    $b.From = $dy; $b.To = 0.0; $b.Duration = $d; $b.BeginTime = $bt; $b.EasingFunction = $script:easeOut
+    $tt.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, $b)
+  } catch {}
+}
+# the element shrinks and fades before it is removed
+function Pop-Out($el, [int]$ms = 170) {
+  try {
+    FadeTo $el 0.0 $ms
+    $tt = $el.RenderTransform
+    if ($tt -is [System.Windows.Media.TranslateTransform]) { Anim-To $tt ([System.Windows.Media.TranslateTransform]::XProperty) 14.0 $ms }
+  } catch {}
 }
 
 # --- equalizer bars ---
@@ -573,7 +694,7 @@ function Add-Slider([string]$id, [scriptblock]$onMove, [scriptblock]$onCommit, [
     Slider-Set $id2 $f $false
     Slider-Look $id2
     Slider-Tip $id2 $f $x
-    & $s2.onMove $f
+    & $s2.onMove $f $id2
   })
   $hit.Add_MouseMove({
     param($snd, $ev)
@@ -583,7 +704,7 @@ function Add-Slider([string]$id, [scriptblock]$onMove, [scriptblock]$onCommit, [
     $f = Slider-FracAt $s2 $x
     if ($s2.drag) {
       Slider-Set $id2 $f $false
-      & $s2.onMove $f
+      & $s2.onMove $f $id2
     }
     Slider-Tip $id2 $f $x
   })
@@ -595,7 +716,7 @@ function Add-Slider([string]$id, [scriptblock]$onMove, [scriptblock]$onCommit, [
       $s2.drag = $false
       $snd.ReleaseMouseCapture()
       Slider-Look $id2
-      & $s2.onCommit $s2.frac
+      & $s2.onCommit $s2.frac $id2
     }
     $ev.Handled = $true
   })
@@ -606,7 +727,7 @@ function Add-Slider([string]$id, [scriptblock]$onMove, [scriptblock]$onCommit, [
     if ($s2.drag) {
       $s2.drag = $false
       Slider-Look $id2
-      & $s2.onCommit $s2.frac
+      & $s2.onCommit $s2.frac $id2
     }
   })
   if ($wheel -gt 0) {
@@ -616,8 +737,8 @@ function Add-Slider([string]$id, [scriptblock]$onMove, [scriptblock]$onCommit, [
       $s2 = $SL[$id2]
       $nf = $s2.frac + ($ev.Delta / 120.0) * $s2.wheel
       Slider-Set $id2 $nf $true
-      & $s2.onMove $s2.frac
-      & $s2.onCommit $s2.frac
+      & $s2.onMove $s2.frac $id2
+      & $s2.onCommit $s2.frac $id2
       $ev.Handled = $true
     })
   }
@@ -626,10 +747,11 @@ function Add-Slider([string]$id, [scriptblock]$onMove, [scriptblock]$onCommit, [
 # ============================================================
 #  State, navigation, expand / collapse
 # ============================================================
-$COMPACT_OF = @{ idle = 'cIdle'; music = 'cMusic'; timer = 'cTimer'; charge = 'cCharge'; done = 'cDone'; vol = 'cVol' }
-$SECTIONS   = @{ music = 'mMusic'; sites = 'mSites'; sys = 'mSys'; clip = 'mClip'; weather = 'mWeather'; view = 'mView'; more = 'mMore'; timer = 'mTimerRun' }
-$TABS       = @{ music = 'tbMusic'; sites = 'tbSites'; sys = 'tbSys'; clip = 'tbClip'; weather = 'tbWeather'; view = 'tbView'; more = 'tbMore' }
+$COMPACT_OF = @{ idle = 'cIdle'; music = 'cMusic'; timer = 'cTimer'; charge = 'cCharge'; done = 'cDone'; vol = 'cVol'; event = 'cEvent' }
+$SECTIONS   = @{ music = 'mMusic'; todo = 'mTodo'; weather = 'mWeather'; sys = 'mSys'; sound = 'mSound'; clip = 'mClip'; sites = 'mSites'; shelf = 'mShelf'; view = 'mView'; more = 'mMore'; timer = 'mTimerRun' }
+$TABS       = @{ music = 'tbMusic'; todo = 'tbTodo'; weather = 'tbWeather'; sys = 'tbSys'; sound = 'tbSound'; clip = 'tbClip'; sites = 'tbSites'; shelf = 'tbShelf'; view = 'tbView'; more = 'tbMore' }
 $ui.musicOn = $false
+$ui.vs = @{ vol = $false; mvol = $false }   # is the slider of this tab already in step with Windows volume?
 
 $script:tabActiveBg = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromRgb(242, 242, 242)); $script:tabActiveBg.Freeze()
 $script:tabActiveFg = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromRgb(14, 14, 18)); $script:tabActiveFg.Freeze()
@@ -659,6 +781,7 @@ function Set-Compact([string]$mode) {
 function Compute-Mode {
   $now = Now-Ms
   if ($now -lt $ui.doneUntil) { return 'done' }
+  if ($now -lt $ui.evtUntil) { return 'event' }
   if ($now -lt $ui.volUntil) { return 'vol' }
   if ($now -lt $ui.chargeUntil) { return 'charge' }
   if ($ui.timerLeft -gt 0) { return 'timer' }
@@ -755,11 +878,21 @@ function Set-Tab([string]$tab, [bool]$animate = $true) {
   }
   Set-TabInd $tab $animate
   if ($prev -eq 'sites' -and $tab -ne 'sites') { Close-SiteAdd $true; Set-SitesEdit $false }
+  if ($prev -eq 'weather' -and $tab -ne 'weather') { Wx-CloseSearch $true }
+  if ($ui.kbd -and (-not $ui.siteAddOpen)) { End-Kbd }
   Show-Section $tab $animate
   Update-SysOn
-  if ($tab -eq 'weather') { Update-WeatherUi }
-  if ($tab -eq 'clip') { $ui.clipRef = $null }
-  if ($tab -eq 'sites') { Build-Sites }
+  try {
+    if ($tab -eq 'music') { $ui.vs.vol = $false; Lyr-Sync }
+    elseif ($tab -eq 'todo') { Build-Events; Build-Todos $animate }
+    elseif ($tab -eq 'weather') { Wx-Show }
+    elseif ($tab -eq 'sound') { $ui.vs.mvol = $false; $ui.mixAt = 0.0; Mixer-Poll }
+    elseif ($tab -eq 'clip') { $ui.clipRef = $null; Build-Clip $animate }
+    elseif ($tab -eq 'sites') { Build-Sites }
+    elseif ($tab -eq 'shelf') { Build-Shelf $animate }
+    elseif ($tab -eq 'view') { Sync-Themes }
+    elseif ($tab -eq 'more') { Sync-Hotkeys; Sync-Pomo }
+  } catch { Log "tab $tab : $($_.Exception.Message)" }
 }
 
 # Opening: the screen behind the island is grabbed and blurred (the glass), the little content fades out, the shape
@@ -807,7 +940,7 @@ function Expand {
       $swSb = New-Object System.Windows.Media.Animation.Storyboard
       $swDur = New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds(700))
       $ax = New-Object System.Windows.Media.Animation.DoubleAnimation
-      $ax.From = -240; $ax.To = 700; $ax.Duration = $swDur
+      $ax.From = -260; $ax.To = 820; $ax.Duration = $swDur
       $ax.EasingFunction = $script:easeOut
       [System.Windows.Media.Animation.Storyboard]::SetTarget($ax, $E.sweepX)
       [System.Windows.Media.Animation.Storyboard]::SetTargetProperty($ax, (PP 'X'))
@@ -822,6 +955,7 @@ function Expand {
   }
   $ui.sizeKey = 'panel'
   Set-PillTint 320 $false
+  Set-Wash
   Retarget 0.52 0.82
   $fast.Start()
 }
@@ -843,7 +977,6 @@ function Finish-Collapse {
   $closeTimer.Stop()
   if (-not $ui.closing) { return }
   $ui.bdReady = $false
-  $ui.volSynced = $false
   Set-Op $E.BdCanvas 0.0
   Close-SiteAdd $true
   Set-SitesEdit $false
@@ -887,31 +1020,6 @@ function Set-WxIcon($path, [string]$key) {
   $path.Data = [System.Windows.Media.Geometry]::Parse($ic[0])
   $path.Stroke = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString($ic[1]))
 }
-function Update-WeatherUi {
-  $wx = $sync.Weather
-  if (-not $wx) { return }
-  if ([object]::ReferenceEquals($wx, $ui.wxRef)) { return }
-  $ui.wxRef = $wx
-  if ($wx.ok -and $wx.city) {
-    Set-WxIcon $E.wIco $wx.icon
-    $E.wTemp.Text = "$($wx.temp)°"
-    $E.wCity.Text = $wx.city
-    $E.wFeels.Text = "Ощущается как $($wx.feels)°"
-    $E.wHum.Text = "Влажность $($wx.hum)% · Ветер $($wx.wind) км/ч"
-    for ($i = 1; $i -le 3; $i++) {
-      $d = $wx.days[$i - 1]
-      $E["wd${i}d"].Text = [string]$d.d
-      Set-WxIcon $E["wd${i}i"] ([string]$d.icon)
-      $E["wd${i}t"].Text = "$($d.hi)° / $($d.lo)°"
-    }
-  } else {
-    $E.wCity.Text = 'Нет данных'
-    $E.wTemp.Text = '—°'
-    $E.wFeels.Text = 'Проверь интернет — повторю через пару минут'
-    $E.wHum.Text = ''
-  }
-}
-
 # ============================================================
 #  Timer
 # ============================================================
@@ -919,13 +1027,54 @@ function Format-Time([double]$sec) {
   if ($sec -lt 0) { $sec = 0 }
   return ("{0}:{1:d2}" -f [int][Math]::Floor($sec / 60), [int]([Math]::Floor($sec) % 60))
 }
-function Start-Timer([int]$sec) {
+function Update-TimerText {
+  $t = Format-Time $ui.timerLeft
+  $pre = ''
+  if ($ui.pomo) { $pre = $(if ($ui.pomoPhase -eq 'work') { 'Фокус ' } else { 'Отдых ' }) }
+  $E.cTimerTxt.Text = $pre + $t
+  $E.xTimerBig.Text = $t
+  if ($ui.pomo) {
+    $n = ($ui.pomoRound % 4) + 1
+    if ($ui.pomoPhase -eq 'work') { $E.xTimerPhase.Text = "ФОКУС · КРУГ $n ИЗ 4"; $E.xTimerPhase.Foreground = $script:brOrange }
+    elseif ($ui.pomoPhase -eq 'long') { $E.xTimerPhase.Text = 'ДЛИННЫЙ ПЕРЕРЫВ'; $E.xTimerPhase.Foreground = $script:brGreen }
+    else { $E.xTimerPhase.Text = 'ПЕРЕРЫВ'; $E.xTimerPhase.Foreground = $script:brGreen }
+  } else { $E.xTimerPhase.Text = '' }
+}
+function Start-Timer([int]$sec, [bool]$pomo = $false) {
+  $ui.pomo = $pomo
   $ui.timerTotal = $sec; $ui.timerLeft = $sec; $ui.timerPaused = $false
   $E.btnPause.Content = 'Пауза'
-  $t = Format-Time $sec
-  $E.cTimerTxt.Text = $t; $E.xTimerBig.Text = $t
-  Collapse
+  Update-TimerText
+  if ($ui.expanded) { Collapse }
   Update-Mode
+}
+# Pomodoro: 25 min focus -> 5 min break, every 4th break is a long one (15 min). Runs by itself until "Стоп".
+function Pomo-Phase([string]$ph) {
+  $ui.pomoPhase = $ph
+  $secs = 1500
+  if ($ph -eq 'short') { $secs = 300 } elseif ($ph -eq 'long') { $secs = 900 }
+  Start-Timer $secs $true
+}
+function Start-Pomo { $ui.pomoRound = 0; Pomo-Phase 'work' }
+# called when a timer reaches zero; returns the text for the "done" pill
+function Pomo-Next {
+  if (-not $ui.pomoArmed) { return }
+  $ui.pomoArmed = $false
+  if ($ui.timerLeft -gt 0) { return }
+  Pomo-Phase $script:pomoNext
+}
+function Timer-Finished {
+  if (-not $ui.pomo) { return 'Готово' }
+  $ui.pomoArmed = $true
+  if ($ui.pomoPhase -eq 'work') {
+    $ui.pomoRound++
+    $script:pomoNext = $(if (($ui.pomoRound % 4) -eq 0) { 'long' } else { 'short' })
+    Later 2900 { Pomo-Next }
+    return $(if ($script:pomoNext -eq 'long') { 'Длинный перерыв!' } else { 'Перерыв!' })
+  }
+  $script:pomoNext = 'work'
+  Later 2900 { Pomo-Next }
+  return 'Снова в фокус!'
 }
 
 # ============================================================
@@ -994,6 +1143,7 @@ $script:ni.Add_MouseClick({
 # ============================================================
 $script:brGreen = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromRgb(48, 209, 88)); $script:brGreen.Freeze()
 $script:brRed = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromRgb(255, 69, 58)); $script:brRed.Freeze()
+$script:brOrange = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromRgb(255, 159, 10)); $script:brOrange.Freeze()
 $ui.playing = $true
 
 # accent colour dots
@@ -1058,18 +1208,27 @@ Add-Slider 'prog' {
   if ($ui.len -gt 0) { Format-Time ($f * $ui.len) } else { '' }
 } $true 0.0
 
-# volume: press / drag / mouse wheel
-Add-Slider 'vol' {
-  param($f)
+# volume (REAL Windows master volume via Core Audio): press / drag / mouse wheel, on the Music AND the Sound tab
+function Set-MasterVol([double]$f) {
   $r = [DI.Vol]::Set([float]$f)
-  if (($r -ne 0) -and (-not $ui.volErrLogged)) { $ui.volErrLogged = $true; Log ('volume set failed: ' + [DI.Vol]::LastError) }
+  if ($r -ne 0) {
+    if (-not $ui.volErrLogged) { $ui.volErrLogged = $true; Log ('volume set failed: ' + [DI.Vol]::LastError) }
+  } elseif (-not $ui.volOkLogged) { $ui.volOkLogged = $true; Log 'volume set ok' }
   if (($f -gt 0.0) -and $ui.lastMute) { [void][DI.Vol]::SetMute($false); $ui.lastMute = $false }
   $ui.lastVol = $f
-  $E.volPct.Text = "$([int][Math]::Round($f * 100.0))%"
-} { param($f) } {
-  param($f)
-  "$([int][Math]::Round($f * 100.0))%"
-} $false 0.03
+  $txt = "$([int][Math]::Round($f * 100.0))%"
+  $E.volPct.Text = $txt; $E.mvolPct.Text = $txt
+  foreach ($sid in 'vol', 'mvol') { if (-not $SL[$sid].drag) { Slider-Set $sid $f $false } }
+}
+foreach ($vid in 'vol', 'mvol') {
+  Add-Slider $vid {
+    param($f, $sid)
+    Set-MasterVol $f
+  } { param($f, $sid) } {
+    param($f)
+    "$([int][Math]::Round($f * 100.0))%"
+  } $false 0.03
+}
 
 # glass transparency (Вид)
 Add-Slider 'al' {
@@ -1081,36 +1240,10 @@ Add-Slider 'al' {
   "$([int][Math]::Round($f * 100.0))%"
 } $false 0.05
 Slider-Set 'al' ([double]$cfg.glassAlpha / 100.0) $false
-$E.btnMute.Add_Click({ [void][DI.Vol]::SetMute(-not $ui.lastMute) })
-
-# clipboard
-foreach ($id in 'cb1', 'cb2', 'cb3', 'cb4', 'cb5', 'cb6') {
-  $E[$id].Add_Click([System.Windows.RoutedEventHandler]{
-    param($snd, $ev)
-    $idx = [int]($snd.Name.Substring(2)) - 1
-    $clip = $sync.Clip
-    if ($clip -and $clip.Count -gt $idx) {
-      $txt = [string]$clip[$idx]
-      for ($i = 0; $i -lt 3; $i++) {
-        try { Set-Clipboard -Value $txt -ErrorAction Stop; $sync.ClipWrite = $txt; break } catch { Start-Sleep -Milliseconds 60 }
-      }
-      try {
-        $hov = $snd.Template.FindName('hov', $snd)
-        if ($hov) {
-          $fa = New-Object System.Windows.Media.Animation.DoubleAnimation
-          $fa.From = 0.24; $fa.To = 0
-          $fa.Duration = New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds(280))
-          $fa.EasingFunction = $script:easeOut
-          $hov.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $fa)
-        }
-      } catch {}
-    }
-  })
-}
-$E.btnClipClear.Add_Click({ $sync.ClipClear = $true; $sync.Clip = @(); $ui.clipRef = $null; Update-ClipUi })
+foreach ($mb in @($E.btnMute, $E.btnMute2)) { $mb.Add_Click({ [void][DI.Vol]::SetMute(-not $ui.lastMute) }) }
 
 # tabs
-foreach ($id in 'tbMusic', 'tbSites', 'tbSys', 'tbClip', 'tbWeather', 'tbView', 'tbMore') {
+foreach ($id in @($TABS.Values)) {
   $E[$id].Add_Click([System.Windows.RoutedEventHandler]{
     param($snd, $ev)
     Set-Tab $snd.Name.Substring(2).ToLower()
@@ -1118,19 +1251,23 @@ foreach ($id in 'tbMusic', 'tbSites', 'tbSys', 'tbClip', 'tbWeather', 'tbView', 
 }
 $E.btnX.Add_Click({ Collapse })
 
-# timer
+# timer + pomodoro
 foreach ($id in 't1', 't5', 't10', 't25', 't45') {
   $E[$id].Add_Click({
     param($snd, $ev)
     $secs = switch ($snd.Name) { 't1' { 60 } 't5' { 300 } 't10' { 600 } 't25' { 1500 } 't45' { 2700 } default { 300 } }
-    Start-Timer $secs
+    Start-Timer $secs $false
   })
 }
+$E.btnPomo.Add_Click({ Start-Pomo })
 $E.btnPause.Add_Click({
   $ui.timerPaused = -not $ui.timerPaused
   $E.btnPause.Content = if ($ui.timerPaused) { 'Дальше' } else { 'Пауза' }
 })
-$E.btnStop.Add_Click({ $ui.timerLeft = 0; $ui.timerPaused = $false; Collapse; Update-Mode })
+$E.btnStop.Add_Click({
+  $ui.timerLeft = 0; $ui.timerPaused = $false; $ui.pomo = $false; $ui.pomoArmed = $false
+  Collapse; Update-Mode
+})
 
 # settings
 $E.swAuto.Add_Click({ Set-Autostart ([bool]$E.swAuto.IsChecked) })
@@ -1174,15 +1311,16 @@ $timerDt.Interval = [TimeSpan]::FromSeconds(1)
 $timerDt.Add_Tick({
   if ($ui.timerLeft -gt 0 -and -not $ui.timerPaused) {
     $ui.timerLeft--
-    $tt = Format-Time $ui.timerLeft
-    $E.cTimerTxt.Text = $tt; $E.xTimerBig.Text = $tt
+    Update-TimerText
     if ($ui.timerLeft -le 0) {
+      $E.cDoneTxt.Text = (Timer-Finished)
       $ui.doneUntil = (Now-Ms) + 2800
       try { [System.Media.SystemSounds]::Asterisk.Play() } catch {}
       if ($ui.expanded) { Collapse }
       Update-Mode
     }
   }
+  try { Check-Reminders } catch { Log "reminders: $($_.Exception.Message)" }
 })
 
 $fast = New-Object System.Windows.Threading.DispatcherTimer
@@ -1251,7 +1389,7 @@ function End-Kbd {
 # ============================================================
 #  Sites: quick links
 # ============================================================
-$SITE_MAX = 11
+$SITE_MAX = 14
 $SITE_COLORS = @('#FF453A', '#FF9F0A', '#30D158', '#5AC8FA', '#0A84FF', '#BF5AF2', '#FF375F', '#AC8E68')
 $script:favMap = @{}
 $script:plateLight = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromRgb(244, 244, 246)); $script:plateLight.Freeze()
@@ -1556,9 +1694,10 @@ $E.siteAdd.Add_MouseLeftButtonDown({
 })
 
 # ============================================================
-#  System load: CPU / GPU / RAM cards with a scrolling graph (samples come from src\Sys.ps1)
+#  System load: CPU / GPU / RAM / network cards with a scrolling graph (samples come from src\Sys.ps1)
 # ============================================================
 $SYS_N = 61
+$PLOT_W = 264.0; $PLOT_H = 104.0
 function New-Br([string]$hex) {
   $b = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString($hex))
   $b.Freeze()
@@ -1570,26 +1709,53 @@ $script:SYS_COL = @{
   ram = @{ line = (New-Br '#BF5AF2'); area = (New-Br '#2EBF5AF2') }
 }
 $script:SYS_HOT = @{ line = (New-Br '#FF453A'); area = (New-Br '#33FF453A') }
+$script:brTmpHot = New-Br '#FF6A5F'; $script:brTmpWarm = New-Br '#FFB340'; $script:brTmpOk = New-Br '#F2FFFFFF'
 $ui.hist = @{}
 $ui.sysHot = @{ cpu = $false; gpu = $false; ram = $false }
 $ruRu = [Globalization.CultureInfo]::GetCultureInfo('ru-RU')
 function Fmt1([double]$v) { return $v.ToString('0.0', $ruRu) }
+function Fmt-Speed([double]$b) {
+  if ($b -ge 1048576.0) { return ((Fmt1 ($b / 1048576.0)) + ' МБ/с') }
+  if ($b -ge 1024.0) { return (([int][Math]::Round($b / 1024.0)).ToString() + ' КБ/с') }
+  return (([int][Math]::Round($b)).ToString() + ' Б/с')
+}
 
 function Draw-Spark([string]$k) {
   $L = $ui.hist[$k]
   $n = $L.Count
-  $step = 442.0 / ($n - 1)
+  $step = $PLOT_W / ($n - 1)
   $pc = New-Object System.Windows.Media.PointCollection
   $pg = New-Object System.Windows.Media.PointCollection
   for ($i = 0; $i -lt $n; $i++) {
-    $y = 32.0 - ([double]$L[$i] / 100.0) * 30.0
+    $y = ($PLOT_H - 3.0) - ([double]$L[$i] / 100.0) * ($PLOT_H - 8.0)
     $pt = [System.Windows.Point]::new([double]($i * $step), [double]$y)
     $pc.Add($pt); $pg.Add($pt)
   }
-  $pg.Add([System.Windows.Point]::new(442.0, 34.0))
-  $pg.Add([System.Windows.Point]::new(0.0, 34.0))
+  $pg.Add([System.Windows.Point]::new($PLOT_W, $PLOT_H))
+  $pg.Add([System.Windows.Point]::new(0.0, $PLOT_H))
   $E["${k}Line"].Points = $pc
   $E["${k}Area"].Points = $pg
+}
+# network: two raw series (down / up) scaled to the busiest value seen in the window (at least 256 KB/s)
+function Draw-Net {
+  $D = $ui.netD; $U = $ui.netU
+  $n = $D.Count
+  $mx = 262144.0
+  foreach ($v in $D) { if ($v -gt $mx) { $mx = $v } }
+  foreach ($v in $U) { if ($v -gt $mx) { $mx = $v } }
+  $step = $PLOT_W / ($n - 1)
+  $pd = New-Object System.Windows.Media.PointCollection
+  $pa = New-Object System.Windows.Media.PointCollection
+  $pu = New-Object System.Windows.Media.PointCollection
+  for ($i = 0; $i -lt $n; $i++) {
+    $x = [double]($i * $step)
+    $yd = ($PLOT_H - 3.0) - ([double]$D[$i] / $mx) * ($PLOT_H - 8.0)
+    $yu = ($PLOT_H - 3.0) - ([double]$U[$i] / $mx) * ($PLOT_H - 8.0)
+    $pd.Add([System.Windows.Point]::new($x, [double]$yd)); $pa.Add([System.Windows.Point]::new($x, [double]$yd))
+    $pu.Add([System.Windows.Point]::new($x, [double]$yu))
+  }
+  $pa.Add([System.Windows.Point]::new($PLOT_W, $PLOT_H)); $pa.Add([System.Windows.Point]::new(0.0, $PLOT_H))
+  $E.netLine.Points = $pd; $E.netArea.Points = $pa; $E.netLine2.Points = $pu
 }
 function Set-SysHot([string]$k, [bool]$hot) {
   if ($ui.sysHot[$k] -eq $hot) { return }
@@ -1609,8 +1775,22 @@ function Reset-SysUi {
     Draw-Spark $k
     $E["${k}Val"].Text = '—'
     $E["${k}Sub"].Text = ''
+    $E["${k}Tmp"].Text = ''
     Set-SysHot $k $false
   }
+  $ui.netD = New-Object 'System.Collections.Generic.List[double]'
+  $ui.netU = New-Object 'System.Collections.Generic.List[double]'
+  for ($i = 0; $i -lt $SYS_N; $i++) { $ui.netD.Add(0.0); $ui.netU.Add(0.0) }
+  Draw-Net
+  $E.netVal.Text = '—'; $E.netSub.Text = ''; $E.netTmp.Text = ''
+  $E.netTmp.Foreground = $script:brOrange
+}
+function Scroll-Plot([string]$k) {
+  if ($ui.reduceMotion) { return }
+  $a = New-Object System.Windows.Media.Animation.DoubleAnimation
+  $a.From = $PLOT_W / ($SYS_N - 1); $a.To = 0.0
+  $a.Duration = New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds(1000))
+  $E["${k}Plot"].RenderTransform.BeginAnimation([System.Windows.Media.TranslateTransform]::XProperty, $a)
 }
 function Push-Sys([string]$k, [double]$v, [string]$valText, [string]$sub) {
   $L = $ui.hist[$k]
@@ -1618,15 +1798,16 @@ function Push-Sys([string]$k, [double]$v, [string]$valText, [string]$sub) {
   $L.RemoveAt(0)
   $L.Add([Math]::Max(0.0, [Math]::Min(100.0, $v)))
   Draw-Spark $k
-  if (-not $ui.reduceMotion) {
-    $a = New-Object System.Windows.Media.Animation.DoubleAnimation
-    $a.From = 442.0 / ($SYS_N - 1); $a.To = 0.0
-    $a.Duration = New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds(1000))
-    $E["${k}Plot"].RenderTransform.BeginAnimation([System.Windows.Media.TranslateTransform]::XProperty, $a)
-  }
+  Scroll-Plot $k
   $E["${k}Val"].Text = $valText
   $E["${k}Sub"].Text = $sub
   Set-SysHot $k ($v -ge 90.0)
+}
+function Set-Temp([string]$k, [double]$c) {
+  $tb = $E["${k}Tmp"]
+  if ($c -lt 0) { $tb.Text = ''; return }
+  $tb.Text = ("{0} °C" -f [int][Math]::Round($c))
+  $tb.Foreground = $(if ($c -ge 85) { $script:brTmpHot } elseif ($c -ge 70) { $script:brTmpWarm } else { $script:brTmpOk })
 }
 function Update-SysUi {
   $sys = $sync.Sys
@@ -1638,6 +1819,7 @@ function Update-SysUi {
   $cpuSub = ''
   if ($sys.cpuName) { $cpuSub = "$($sys.cpuName) · $($sys.threads) потоков" } else { $cpuSub = "$($sys.threads) потоков" }
   if ($c -ge 0) { Push-Sys 'cpu' $c ("{0}%" -f [int][Math]::Round($c)) $cpuSub }
+  Set-Temp 'cpu' ([double]$sys.cpuTemp)
   # GPU
   $g = [double]$sys.gpu
   if ($g -ge 0) {
@@ -1652,30 +1834,1842 @@ function Update-SysUi {
   } else {
     Push-Sys 'gpu' 0.0 '—' $(if ($sys.gpuName) { "$($sys.gpuName) · нет данных о нагрузке" } else { 'Нет данных о нагрузке видеокарты' })
   }
+  Set-Temp 'gpu' ([double]$sys.gpuTemp)
   # RAM
   $r = [double]$sys.ram
   if ($r -ge 0) {
     Push-Sys 'ram' $r ("{0}%" -f [int][Math]::Round($r)) ("Занято " + (Fmt1 ([double]$sys.ramUsed)) + " из " + (Fmt1 ([double]$sys.ramTotal)) + " ГБ")
   }
+  # network
+  $nd = [double]$sys.netDown; $nu = [double]$sys.netUp
+  if ($nd -ge 0 -and $ui.netD) {
+    $ui.netD.RemoveAt(0); $ui.netD.Add($nd)
+    $ui.netU.RemoveAt(0); $ui.netU.Add([Math]::Max(0.0, $nu))
+    Draw-Net
+    Scroll-Plot 'net'
+    $E.netVal.Text = '↓ ' + (Fmt-Speed $nd)
+    $E.netTmp.Text = '↑ ' + (Fmt-Speed $nu)
+    $E.netSub.Text = 'Загрузка · отдача'
+  }
 }
+try {
+
+# ============================================================
+#  Small UI helpers shared by the new tabs
+# ============================================================
+function Utc-Ms { return [long]([DateTime]::UtcNow.Ticks / 10000) }
+function Up($el, [int]$n) {
+  for ($i = 0; $i -lt $n; $i++) { if ($el) { $el = $el.Parent } }
+  return $el
+}
+function New-Tb([string]$text, [double]$size, $fg, [string]$weight = 'Normal') {
+  $tb = New-Object System.Windows.Controls.TextBlock
+  $tb.Text = $text; $tb.FontSize = $size; $tb.Foreground = $fg
+  $tb.FontWeight = [System.Windows.FontWeights]::$weight
+  return $tb
+}
+$script:brWhite = New-Br '#FFFFFFFF'
+$script:brSoft = New-Br '#A0FFFFFF'
+$script:brDim = New-Br '#70FFFFFF'
+function Set-Hint($tb, $hint) { if ($hint) { $hint.Visibility = $(if ($tb.Text) { 'Collapsed' } else { 'Visible' }) } }
+# a text box on the glass: first click grabs the keyboard (the island window normally never takes focus)
+function Hook-Kbd($tb) {
+  $tb.Add_PreviewMouseLeftButtonDown({ param($snd, $ev) Begin-Kbd $snd })
+  $hint = $E["$($tb.Name)Hint"]
+  if ($hint) { $tb.Add_TextChanged({ param($snd, $ev) Set-Hint $snd $E["$($snd.Name)Hint"] }) }
+}
+function Wait-Spin($el) { }
+
+# ============================================================
+#  Lyrics (LRCLIB through the internet worker, synced line by line)
+# ============================================================
+$ui.lyr = @{ n = 0; synced = $false; times = $null; lines = @(); tops = @(); hs = @(); idx = -2; userUntil = 0.0; viewH = 380.0; textH = 0.0 }
+$ui.lyrReq = ''
+$ui.lyrRef = $null
+$script:lyrT = $E.lyrHost.RenderTransform
+
+function Lyr-Show([string]$msg) {
+  $E.lyrMsg.Text = $msg
+  FadeTo $E.lyrEmpty 1.0 240
+  FadeTo $E.lyrHost 0.0 160
+}
+function Lyr-Clear {
+  $E.lyrHost.Children.Clear()
+  $L = $ui.lyr
+  $L.lines = @(); $L.tops = @(); $L.hs = @(); $L.n = 0; $L.idx = -2; $L.synced = $false; $L.times = $null; $L.userUntil = 0.0
+}
+# ask for the lyrics of the track that is playing now (only while the Music tab is open)
+function Lyr-Sync {
+  if (-not ($ui.expanded -and (-not $ui.closing) -and $ui.tab -eq 'music')) { return }
+  $st = $sync.State
+  if ((-not $st) -or $st.mode -ne 'music' -or (-not $st.title)) {
+    if ($ui.lyrReq -ne '#none') { $ui.lyrReq = '#none'; Lyr-Clear; Lyr-Show 'Включи песню — текст появится здесь' }
+    return
+  }
+  $key = (([string]$st.artist) + '|' + ([string]$st.title)).ToLower()
+  if ($key -eq $ui.lyrReq) { return }
+  $ui.lyrReq = $key
+  Lyr-Clear
+  Lyr-Show 'Ищу текст…'
+  $sync.LyrReq = @{ key = $key; title = [string]$st.title; artist = [string]$st.artist; dur = [double]$st.len }
+}
+function Lyr-Poll {
+  $res = $sync.Lyr
+  if (-not $res) { return }
+  if ([object]::ReferenceEquals($res, $ui.lyrRef)) { return }
+  if ([string]$res.key -ne $ui.lyrReq) { return }
+  $ui.lyrRef = $res
+  if ($res.state -eq 'ok') { Lyr-Build $res }
+  elseif ($res.state -eq 'err') { Lyr-Show 'Не удалось загрузить текст. Проверь интернет' }
+  else { Lyr-Show 'Для этой песни текста не нашлось' }
+}
+function Lyr-Build($res) {
+  Lyr-Clear
+  $L = $ui.lyr
+  $lh = $E.lyrHost
+  $synced = [bool]$res.synced
+  $L.synced = $synced
+  if ($synced) { $L.times = [double[]]$res.times }
+  $lines = New-Object System.Collections.ArrayList
+  foreach ($s in @($res.texts)) {
+    $tb = New-Object System.Windows.Controls.TextBlock
+    $tb.Text = [string]$s
+    $tb.TextWrapping = 'Wrap'
+    $tb.Foreground = $script:brWhite
+    if ($synced) {
+      $tb.FontSize = 18.5; $tb.FontWeight = [System.Windows.FontWeights]::SemiBold
+      $tb.Margin = [System.Windows.Thickness]::new(0, 0, 0, 16)
+      $tb.Opacity = 0.24
+      $tb.RenderTransformOrigin = [System.Windows.Point]::new(0.0, 0.5)
+      $tb.RenderTransform = New-Object System.Windows.Media.ScaleTransform (0.9, 0.9)
+    } else {
+      $tb.FontSize = 14.5
+      $tb.Margin = [System.Windows.Thickness]::new(0, 0, 0, $(if (([string]$s).Trim()) { 6 } else { 12 }))
+      $tb.Opacity = 0.88
+    }
+    [void]$lh.Children.Add($tb)
+    [void]$lines.Add($tb)
+  }
+  $L.lines = $lines.ToArray()
+  $L.n = $lines.Count
+  try { $lh.UpdateLayout() } catch {}
+  $tops = New-Object 'System.Collections.Generic.List[double]'
+  $hs = New-Object 'System.Collections.Generic.List[double]'
+  $zero = New-Object System.Windows.Point (0.0, 0.0)
+  foreach ($tb in $L.lines) {
+    $tops.Add([double]$tb.TranslatePoint($zero, $lh).Y)
+    $hs.Add([double]$tb.ActualHeight)
+  }
+  $L.tops = $tops.ToArray(); $L.hs = $hs.ToArray()
+  $vh = [double]$E.lyrView.ActualHeight
+  if ($vh -lt 60) { $vh = 380.0 }
+  $L.viewH = $vh
+  $L.textH = $(if ($L.n -gt 0) { $L.tops[$L.n - 1] + $L.hs[$L.n - 1] } else { 0.0 })
+  $script:lyrT.BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, $null)
+  $script:lyrT.Y = $(if ($synced) { $vh * 0.4 } else { 24.0 })
+  Set-Op $E.lyrHost 0.0
+  FadeTo $E.lyrHost 1.0 340
+  FadeTo $E.lyrEmpty 0.0 200
+  if ($synced) { Lyr-Tick }
+}
+function Lyr-Scroll([bool]$instant = $false) {
+  $L = $ui.lyr
+  if ($L.n -lt 1) { return }
+  $ref = [Math]::Max(0, [Math]::Min($L.idx, $L.n - 1))
+  $ty = $L.viewH * 0.4 - ($L.tops[$ref] + $L.hs[$ref] / 2.0)
+  $yp = [System.Windows.Media.TranslateTransform]::YProperty
+  if ($instant -or $ui.reduceMotion) { $script:lyrT.BeginAnimation($yp, $null); $script:lyrT.Y = $ty }
+  else { Anim-To $script:lyrT $yp $ty 620 }
+}
+function Lyr-Activate([int]$new) {
+  $L = $ui.lyr
+  $old = $L.idx
+  $L.idx = $new
+  $n = $L.n
+  if ($old -eq -2) { $lo = 0; $hi = $n - 1 }
+  else {
+    $o = $(if ($old -lt 0) { $new } else { $old })
+    $lo = [Math]::Max(0, [Math]::Min($o, $new) - 3)
+    $hi = [Math]::Min($n - 1, [Math]::Max($o, $new) + 3)
+  }
+  $opP = [System.Windows.UIElement]::OpacityProperty
+  $sxP = [System.Windows.Media.ScaleTransform]::ScaleXProperty
+  $syP = [System.Windows.Media.ScaleTransform]::ScaleYProperty
+  for ($i = $lo; $i -le $hi; $i++) {
+    $d = $(if ($new -lt 0) { 9 } else { [Math]::Abs($i - $new) })
+    $op = 0.24; if ($d -eq 0) { $op = 1.0 } elseif ($d -eq 1) { $op = 0.52 } elseif ($d -eq 2) { $op = 0.36 }
+    $sc = $(if ($d -eq 0) { 1.0 } else { 0.9 })
+    $tb = $L.lines[$i]
+    if ($old -eq -2 -or $ui.reduceMotion) {
+      $tb.BeginAnimation($opP, $null); $tb.Opacity = $op
+      $tb.RenderTransform.BeginAnimation($sxP, $null); $tb.RenderTransform.BeginAnimation($syP, $null)
+      $tb.RenderTransform.ScaleX = $sc; $tb.RenderTransform.ScaleY = $sc
+    } else {
+      Anim-To $tb $opP $op 320
+      Anim-To $tb.RenderTransform $sxP $sc 360
+      Anim-To $tb.RenderTransform $syP $sc 360
+    }
+  }
+  if ((Now-Ms) -ge $L.userUntil) { Lyr-Scroll ($old -eq -2) }
+}
+function Lyr-Tick {
+  $L = $ui.lyr
+  if ((-not $L.synced) -or $L.n -lt 1 -or (-not $L.times)) { return }
+  if (-not ($ui.expanded -and $ui.tab -eq 'music')) { return }
+  $p = [double]$ui.lastPos + 0.3
+  $r = [Array]::BinarySearch($L.times, $p)
+  $idx = $(if ($r -ge 0) { $r } else { (-bnot $r) - 1 })
+  if ($idx -ne $L.idx) { Lyr-Activate $idx }
+  elseif ($L.userUntil -gt 0 -and (Now-Ms) -ge $L.userUntil) { $L.userUntil = 0.0; Lyr-Scroll }
+}
+$E.lyrView.Add_MouseWheel({
+  param($snd, $ev)
+  $L = $ui.lyr
+  if ($L.n -lt 1) { return }
+  $yp = [System.Windows.Media.TranslateTransform]::YProperty
+  $cur = [double]$script:lyrT.Y
+  $ny = $cur + ($ev.Delta / 120.0) * 52.0
+  if (-not $L.synced) {
+    $minY = [Math]::Min(24.0, $L.viewH - $L.textH - 24.0)
+    $ny = [Math]::Max($minY, [Math]::Min(24.0, $ny))
+  }
+  $script:lyrT.BeginAnimation($yp, $null)
+  $script:lyrT.Y = $cur
+  Anim-To $script:lyrT $yp $ny 200
+  $L.userUntil = (Now-Ms) + 3500
+  $ev.Handled = $true
+})
+
+# ============================================================
+#  Weather: saved cities (chips), city search, hourly strip, details, 5 days
+# ============================================================
+$ui.wx = @{ ref = $null; seq = 0; qId = 0; cityRef = $null; searchOpen = $false; autoName = ''; sel = $null; dim = $false }
+
+function Wx-Cur {
+  $i = [int]$cfg.cityIdx
+  $cs = @($cfg.cities)
+  if ($i -ge 0 -and $i -lt $cs.Count) {
+    $c = $cs[$i]
+    return @{ key = ('c:' + ([string]$c.n).ToLower()); auto = $false; name = [string]$c.n; lat = $c.lat; lon = $c.lon; idx = $i }
+  }
+  return @{ key = 'auto'; auto = $true; name = ''; lat = $null; lon = $null; idx = -1 }
+}
+function Wx-Request($c) {
+  $ui.wx.seq++
+  $sync.WxReq = @{ seq = $ui.wx.seq; key = $c.key; auto = $c.auto; name = $c.name; lat = $c.lat; lon = $c.lon }
+}
+# the content rows fade while another city loads
+function Wx-Dim([bool]$on) {
+  if ($ui.wx.dim -eq $on) { return }
+  $ui.wx.dim = $on
+  foreach ($ch in $E.mWeather.Children) {
+    $nm = [string]$ch.Name
+    if ($nm -eq 'wxChips' -or $nm -eq 'wxStatus' -or $nm -eq 'wxSearch') { continue }
+    FadeTo $ch $(if ($on) { 0.18 } else { 1.0 }) 260
+  }
+}
+function Wx-Status([string]$text) {
+  if ($text) {
+    $E.wxStatus.Text = $text
+    if ($E.wxStatus.Visibility -ne 'Visible') { Set-Op $E.wxStatus 0.0; $E.wxStatus.Visibility = 'Visible'; FadeTo $E.wxStatus 1.0 220 }
+  } else { $E.wxStatus.Visibility = 'Collapsed' }
+}
+
+function New-Chip([string]$text, [bool]$sel) {
+  $b = New-Object System.Windows.Controls.Button
+  $b.Style = $E.wxChips.FindResource('PillBtn')
+  $b.Content = $text
+  $b.Margin = [System.Windows.Thickness]::new(0)
+  $b.Padding = [System.Windows.Thickness]::new(14, 6, 14, 6)
+  $b.Background = New-Object System.Windows.Media.SolidColorBrush ($(if ($sel) { [System.Windows.Media.Color]::FromRgb(242, 242, 242) } else { [System.Windows.Media.Color]::FromArgb(0x22, 255, 255, 255) }))
+  $b.Foreground = New-Object System.Windows.Media.SolidColorBrush ($(if ($sel) { [System.Windows.Media.Color]::FromRgb(16, 16, 20) } else { [System.Windows.Media.Color]::FromRgb(255, 255, 255) }))
+  return $b
+}
+function Sync-WxChips {
+  $sel = [int]$cfg.cityIdx
+  foreach ($w in $E.wxChips.Children) {
+    if (-not ($w -is [System.Windows.Controls.Grid])) { continue }
+    $b = $w.Children[0]
+    if ($b.Tag -is [int]) {
+      $on = ([int]$b.Tag -eq $sel)
+      Anim-Color $b.Background $(if ($on) { [System.Windows.Media.Color]::FromRgb(242, 242, 242) } else { [System.Windows.Media.Color]::FromArgb(0x22, 255, 255, 255) }) 260
+      Anim-Color $b.Foreground $(if ($on) { [System.Windows.Media.Color]::FromRgb(16, 16, 20) } else { [System.Windows.Media.Color]::FromRgb(255, 255, 255) }) 260
+    }
+  }
+}
+function Build-WxChips {
+  $h = $E.wxChips
+  $h.Children.Clear()
+  $cs = @($cfg.cities)
+  $sel = [int]$cfg.cityIdx
+  $i = 0
+  $items = @(@{ idx = -1; text = $(if ($ui.wx.autoName) { 'Моё место · ' + $ui.wx.autoName } else { 'Моё место' }); del = $false })
+  for ($k = 0; $k -lt $cs.Count; $k++) { $items += , @{ idx = $k; text = [string]$cs[$k].n; del = $true } }
+  foreach ($it in $items) {
+    $w = New-Object System.Windows.Controls.Grid
+    $w.Margin = [System.Windows.Thickness]::new(0, 0, 6, 6)
+    $b = New-Chip $it.text ($it.idx -eq $sel)
+    $b.Tag = [int]$it.idx
+    if ($it.del) { $b.Padding = [System.Windows.Thickness]::new(14, 6, 28, 6) }
+    $b.Add_Click({ param($snd, $ev) Select-City ([int]$snd.Tag) })
+    [void]$w.Children.Add($b)
+    if ($it.del) {
+      $x = New-Object System.Windows.Controls.Button
+      $x.Style = $E.wxChips.FindResource('IcoBtn')
+      $x.Width = 18; $x.Height = 18
+      $x.Background = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromArgb(0x30, 0, 0, 0))
+      $x.HorizontalAlignment = 'Right'; $x.VerticalAlignment = 'Center'
+      $x.Margin = [System.Windows.Thickness]::new(0, 0, 5, 0)
+      $x.Opacity = 0.0
+      $x.Tag = [int]$it.idx
+      $xp = New-Object System.Windows.Shapes.Path
+      $xp.Data = [System.Windows.Media.Geometry]::Parse('M0 0 L6 6 M6 0 L0 6')
+      $xp.Stroke = $script:brWhite; $xp.StrokeThickness = 1.5; $xp.StrokeStartLineCap = 'Round'; $xp.StrokeEndLineCap = 'Round'
+      $xp.Width = 7; $xp.Height = 7; $xp.Stretch = 'Uniform'
+      $x.Content = $xp
+      $x.Add_Click({ param($snd, $ev) $ev.Handled = $true; Remove-City ([int]$snd.Tag) })
+      [void]$w.Children.Add($x)
+      $w.Add_MouseEnter({ param($snd, $ev) FadeTo $snd.Children[1] 1.0 140 })
+      $w.Add_MouseLeave({ param($snd, $ev) FadeTo $snd.Children[1] 0.0 200 })
+    }
+    [void]$h.Children.Add($w)
+    Pop-In $w $i 6
+    $i++
+  }
+  $add = New-Object System.Windows.Controls.Button
+  $add.Style = $E.wxChips.FindResource('PillBtn')
+  $add.Content = '+  Город'
+  $add.Margin = [System.Windows.Thickness]::new(0, 0, 0, 6)
+  $add.Padding = [System.Windows.Thickness]::new(14, 6, 14, 6)
+  $add.Background = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromArgb(0x14, 255, 255, 255))
+  $add.Add_Click({ Wx-OpenSearch })
+  [void]$h.Children.Add($add)
+  Pop-In $add $i 6
+}
+function Select-City([int]$i) {
+  if ([int]$cfg.cityIdx -eq $i) { return }
+  $cfg.cityIdx = $i
+  Request-Save
+  Sync-WxChips
+  Wx-Load $false
+}
+function Add-City($it) {
+  $cs = @($cfg.cities)
+  for ($k = 0; $k -lt $cs.Count; $k++) {
+    if (([string]$cs[$k].n).ToLower() -eq ([string]$it.n).ToLower()) { $cfg.cityIdx = $k; Request-Save; Wx-CloseSearch; Sync-WxChips; Wx-Load $false; return }
+  }
+  if ($cs.Count -ge 6) { $cs = @($cs[1..5]) }
+  $cfg.cities = @($cs) + (, @{ n = [string]$it.n; lat = [double]$it.lat; lon = [double]$it.lon })
+  $cfg.cityIdx = @($cfg.cities).Count - 1
+  Request-Save
+  Wx-CloseSearch
+  Build-WxChips
+  Wx-Load $false
+}
+function Remove-City([int]$idx) {
+  $cs = @($cfg.cities)
+  $new = @()
+  for ($k = 0; $k -lt $cs.Count; $k++) { if ($k -ne $idx) { $new += , $cs[$k] } }
+  $cfg.cities = $new
+  $ci = [int]$cfg.cityIdx
+  if ($ci -eq $idx) { $cfg.cityIdx = -1 } elseif ($ci -gt $idx) { $cfg.cityIdx = $ci - 1 }
+  Request-Save
+  Build-WxChips
+  Wx-Load $false
+}
+
+# data -> screen
+function Uv-Text([double]$u) {
+  $w = 'низкий'
+  if ($u -ge 8) { $w = 'очень высокий' } elseif ($u -ge 6) { $w = 'высокий' } elseif ($u -ge 3) { $w = 'умеренный' }
+  return ("{0} · {1}" -f [int][Math]::Round($u), $w)
+}
+function Render-Weather($wx) {
+  if ((-not $wx) -or (-not $wx.ok)) {
+    Wx-Dim $true
+    Wx-Status 'Нет данных о погоде. Проверь интернет — попробую снова'
+    return
+  }
+  Wx-Status ''
+  $c = Wx-Cur
+  if ($wx.key -eq 'auto') {
+    if ($ui.wx.autoName -ne [string]$wx.city) { $ui.wx.autoName = [string]$wx.city; Build-WxChips }
+  } elseif ((-not $c.auto) -and $null -eq $c.lat -and $null -ne $wx.lat) {
+    try { $cfg.cities[$c.idx].lat = [double]$wx.lat; $cfg.cities[$c.idx].lon = [double]$wx.lon; Request-Save } catch {}
+  }
+  Set-WxIcon $E.wIco $wx.icon
+  $E.wTemp.Text = "$($wx.temp)°"
+  $E.wCity.Text = [string]$wx.city
+  $cond = [string]$wx.cond
+  if ($wx.rainP -ge 0) { $cond = $(if ($cond) { "$cond · осадки $($wx.rainP)%" } else { "Осадки $($wx.rainP)%" }) }
+  $E.wCond.Text = $cond
+  $E.wFeels.Text = "Ощущается как $($wx.feels)° · сегодня $($wx.hi)° / $($wx.lo)°"
+  $E.wSun.Text = $(if ($wx.sunrise) { "Восход $($wx.sunrise) · закат $($wx.sunset)" } else { '' })
+  $E.wdtWind.Text = "$($wx.wind) км/ч"
+  $E.wdtHum.Text = "$($wx.hum)%"
+  $E.wdtUv.Text = Uv-Text ([double]$wx.uv)
+  $E.wdtPress.Text = "$($wx.press) мм"
+  $hrs = @($wx.hours)
+  for ($i = 1; $i -le 8; $i++) {
+    $whp = $E["wh${i}t"].Parent
+    if ($i -le $hrs.Count) {
+      $h = $hrs[$i - 1]
+      $E["wh${i}t"].Text = [string]$h.t
+      Set-WxIcon $E["wh${i}i"] ([string]$h.icon)
+      $E["wh${i}v"].Text = "$($h.v)°"
+      $whp.Visibility = 'Visible'
+    } else { $whp.Visibility = 'Hidden' }
+  }
+  $E.wxHourly.Parent.Visibility = $(if ($hrs.Count -gt 0) { 'Visible' } else { 'Hidden' })
+  $ds = @($wx.days)
+  for ($i = 1; $i -le 5; $i++) {
+    $card = Up $E["wd${i}d"] 2
+    if ($i -le $ds.Count) {
+      $d = $ds[$i - 1]
+      $E["wd${i}d"].Text = [string]$d.d
+      Set-WxIcon $E["wd${i}i"] ([string]$d.icon)
+      $E["wd${i}t"].Text = "$($d.hi)° / $($d.lo)°"
+      $card.Visibility = 'Visible'
+    } else { $card.Visibility = 'Hidden' }
+  }
+  # everything comes in one after another
+  Wx-Dim $false
+  $n = 0
+  foreach ($el in @((Up $E.wTemp 3), (Up $E.wdtWind 2), (Up $E.wdtHum 2), (Up $E.wdtUv 2), (Up $E.wdtPress 2), $E.wxHourly.Parent)) { Pop-In $el $n 8; $n++ }
+  for ($i = 1; $i -le 8; $i++) { if ($i -le $hrs.Count) { Pop-In $E["wh${i}t"].Parent ($n + $i) 6 } }
+  for ($i = 1; $i -le 5; $i++) { if ($i -le $ds.Count) { Pop-In (Up $E["wd${i}d"] 2) ($n + 8 + $i) 8 } }
+}
+function Wx-Load([bool]$force) {
+  $c = Wx-Cur
+  $res = $sync.WxRes[$c.key]
+  $now = Utc-Ms
+  if ($res -and $res.ok) {
+    $ui.wx.ref = $res
+    Render-Weather $res
+    if ($force -or (($now - [long]$res.at) -gt 1200000)) { Wx-Request $c }
+  } else {
+    $ui.wx.ref = $null
+    Wx-Dim $true
+    if ($res -and (-not $res.ok) -and (($now - [long]$res.at) -lt 20000) -and (-not $force)) { Wx-Status 'Нет данных о погоде. Проверь интернет — попробую снова'; Wx-Request $c; return }
+    Wx-Status 'Загружаю погоду…'
+    Wx-Request $c
+  }
+}
+function Wx-Show {
+  Build-WxChips
+  $ui.wx.dim = $false
+  Wx-Load $false
+}
+function Update-WeatherUi {
+  $c = Wx-Cur
+  $res = $sync.WxRes[$c.key]
+  if ($res -and (-not [object]::ReferenceEquals($res, $ui.wx.ref))) {
+    $ui.wx.ref = $res
+    Render-Weather $res
+  }
+  Wx-PollSearch
+}
+
+# city search overlay
+function Wx-OpenSearch {
+  if ($ui.wx.searchOpen) { return }
+  $ui.wx.searchOpen = $true
+  $E.wxQuery.Text = ''
+  $E.wxResHost.Children.Clear()
+  $E.wxResMsg.Text = 'Например: Казань, Минск, Tokyo'
+  $E.wxResMsg.Visibility = 'Visible'
+  $E.wxSearch.Visibility = 'Visible'
+  Set-Op $E.wxSearch 0.0
+  FadeTo $E.wxSearch 1.0 200
+  $g = $E.wxSearch.RenderTransform.Children
+  foreach ($ax in @([System.Windows.Media.ScaleTransform]::ScaleXProperty, [System.Windows.Media.ScaleTransform]::ScaleYProperty)) {
+    $g[0].BeginAnimation($ax, $null)
+    if ($ax -eq [System.Windows.Media.ScaleTransform]::ScaleXProperty) { $g[0].ScaleX = 0.96 } else { $g[0].ScaleY = 0.96 }
+    Anim-To $g[0] $ax 1.0 320 $script:easeBack
+  }
+  $g[1].BeginAnimation([System.Windows.Media.TranslateTransform]::YProperty, $null); $g[1].Y = -8.0
+  Anim-To $g[1] ([System.Windows.Media.TranslateTransform]::YProperty) 0.0 300
+  Begin-Kbd $E.wxQuery
+}
+function Wx-CloseSearch([bool]$instant = $false) {
+  if (-not $ui.wx.searchOpen) { return }
+  $ui.wx.searchOpen = $false
+  if ($ui.kbd -and (-not $ui.siteAddOpen)) { End-Kbd }
+  if ($instant) { Set-Op $E.wxSearch 0.0; $E.wxSearch.Visibility = 'Collapsed' }
+  else { FadeTo $E.wxSearch 0.0 150; Later 180 { if (-not $ui.wx.searchOpen) { $E.wxSearch.Visibility = 'Collapsed' } } }
+}
+$script:wxQTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:wxQTimer.Interval = [TimeSpan]::FromMilliseconds(380)
+$script:wxQTimer.Add_Tick({
+  $script:wxQTimer.Stop()
+  $q = $E.wxQuery.Text.Trim()
+  if ($q.Length -ge 2) {
+    $ui.wx.qId++
+    $sync.CityQ = @{ id = $ui.wx.qId; q = $q }
+    $E.wxResMsg.Text = 'Ищу…'; $E.wxResMsg.Visibility = 'Visible'
+  } else {
+    $E.wxResHost.Children.Clear()
+    $E.wxResMsg.Text = 'Например: Казань, Минск, Tokyo'; $E.wxResMsg.Visibility = 'Visible'
+  }
+})
+$E.wxQuery.Add_TextChanged({ $script:wxQTimer.Stop(); $script:wxQTimer.Start() })
+$E.wxQuery.Add_KeyDown({
+  param($snd, $ev)
+  if ($ev.Key -eq [System.Windows.Input.Key]::Escape) { Wx-CloseSearch; $ev.Handled = $true }
+  elseif ($ev.Key -eq [System.Windows.Input.Key]::Return) {
+    $first = $null
+    if ($E.wxResHost.Children.Count -gt 0) { $first = $E.wxResHost.Children[0].Tag }
+    if ($first) { Add-City $first }
+    $ev.Handled = $true
+  }
+})
+$E.btnWxClose.Add_Click({ Wx-CloseSearch })
+function Wx-PollSearch {
+  $r = $sync.CityRes
+  if ((-not $r) -or ([int]$r.id -ne [int]$ui.wx.qId) -or [object]::ReferenceEquals($r, $ui.wx.cityRef)) { return }
+  $ui.wx.cityRef = $r
+  $h = $E.wxResHost
+  $h.Children.Clear()
+  $items = @($r.items) | Where-Object { $_ }
+  if (-not $r.ok) { $E.wxResMsg.Text = 'Не удалось выполнить поиск. Проверь интернет'; $E.wxResMsg.Visibility = 'Visible'; return }
+  if (@($items).Count -eq 0) { $E.wxResMsg.Text = 'Ничего не нашлось'; $E.wxResMsg.Visibility = 'Visible'; return }
+  $E.wxResMsg.Visibility = 'Collapsed'
+  $i = 0
+  foreach ($it in $items) {
+    $b = New-Object System.Windows.Controls.Button
+    $b.Style = $E.wxResHost.FindResource('RowBtn')
+    $b.Margin = [System.Windows.Thickness]::new(0, 0, 0, 4)
+    $b.Padding = [System.Windows.Thickness]::new(14, 8, 14, 8)
+    $b.Tag = $it
+    $g = New-Object System.Windows.Controls.Grid
+    $g.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition)) | Out-Null
+    $nm = New-Tb ([string]$it.n) 13 $script:brWhite 'SemiBold'
+    $sb = New-Tb ([string]$it.sub) 11 $script:brSoft
+    $sb.HorizontalAlignment = 'Right'; $sb.TextTrimming = 'CharacterEllipsis'; $sb.MaxWidth = 300
+    $nm.HorizontalAlignment = 'Left'
+    [void]$g.Children.Add($nm); [void]$g.Children.Add($sb)
+    $b.Content = $g
+    $b.Add_Click({ param($snd, $ev) Add-City $snd.Tag })
+    [void]$h.Children.Add($b)
+    Pop-In $b $i 6
+    $i++
+  }
+}
+
+} catch { Log ("init c4a failed: " + $_.Exception.Message + " @ line " + $_.InvocationInfo.ScriptLineNumber) }
+try {
+
+# ============================================================
+#  Дела, заметки, события, напоминания, календарь по ссылке (ICS)
+# ============================================================
+$script:inv = [Globalization.CultureInfo]::InvariantCulture
+$script:colGreen = [System.Windows.Media.Color]::FromRgb(48, 209, 88)
+$script:colClear = [System.Windows.Media.Color]::FromArgb(0, 255, 255, 255)
+$script:colRing = [System.Windows.Media.Color]::FromArgb(0x99, 255, 255, 255)
+$script:brIcoBg = New-Br '#22FFFFFF'
+$ui.evList = @(); $ui.evDirty = $true
+$ui.icsItems = @(); $ui.icsSeq = 0; $ui.icsAt = 0.0; $ui.icsRef = $null
+$ui.notified = @{}; $ui.heroKey = '#'; $ui.heroAt = 0.0; $ui.heroErrUntil = 0.0
+$RU_WD = @{
+  'понедельник' = 1; 'пн' = 1; 'вторник' = 2; 'вт' = 2; 'среда' = 3; 'среду' = 3; 'ср' = 3; 'четверг' = 4; 'чт' = 4
+  'пятница' = 5; 'пятницу' = 5; 'пт' = 5; 'суббота' = 6; 'субботу' = 6; 'сб' = 6; 'воскресенье' = 0; 'вс' = 0
+}
+function New-Id { return [guid]::NewGuid().ToString('N').Substring(0, 8) }
+
+# small round "×" button that appears when the pointer is over a row
+function New-XButton([double]$size = 22.0) {
+  $x = New-Object System.Windows.Controls.Button
+  $x.Style = $E.tdHost.FindResource('IcoBtn')
+  $x.Width = $size; $x.Height = $size
+  $x.Background = $script:brIcoBg
+  $x.HorizontalAlignment = 'Right'; $x.VerticalAlignment = 'Center'
+  $x.Opacity = 0.0
+  $xp = New-Object System.Windows.Shapes.Path
+  $xp.Data = [System.Windows.Media.Geometry]::Parse('M0 0 L7 7 M7 0 L0 7')
+  $xp.Stroke = $script:brWhite; $xp.StrokeThickness = 1.6
+  $xp.StrokeStartLineCap = 'Round'; $xp.StrokeEndLineCap = 'Round'
+  $xp.Width = 8; $xp.Height = 8; $xp.Stretch = 'Uniform'
+  $x.Content = $xp
+  return $x
+}
+function Pulse-Scale($el, [double]$from, [int]$ms = 420) {
+  try {
+    $st = $el.RenderTransform
+    foreach ($ax in @([System.Windows.Media.ScaleTransform]::ScaleXProperty, [System.Windows.Media.ScaleTransform]::ScaleYProperty)) {
+      $a = New-Object System.Windows.Media.Animation.DoubleAnimation
+      $a.From = $from; $a.To = 1.0
+      $a.Duration = New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds($ms))
+      $a.EasingFunction = $script:easeBack
+      $st.BeginAnimation($ax, $a)
+    }
+  } catch {}
+}
+
+# ------------------------------------------------------------
+#  Parsing a phrase like "завтра 15:30 Созвон", "через 20 мин чай", "в пятницу в 19 кино", "25.11 12:00 врач"
+# ------------------------------------------------------------
+function Cut-Match([string]$s, $m) { return ($s.Substring(0, $m.Index) + ' ' + $s.Substring($m.Index + $m.Length)) }
+function Parse-Event([string]$text) {
+  $s = ' ' + ([string]$text).Trim() + ' '
+  $now = Get-Date
+  $ic = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+  $fmt = "yyyy-MM-dd'T'HH:mm"
+  # relative
+  $m = [regex]::Match($s, '\sчерез\s+(\d{1,3})\s*(мин\w*|м|час\w*|ч)(?=\s|$)', $ic)
+  if ($m.Success) {
+    $n = [int]$m.Groups[1].Value
+    $unit = $m.Groups[2].Value.ToLower()
+    $dt = $(if ($unit.StartsWith('ч')) { $now.AddHours($n) } else { $now.AddMinutes($n) })
+    $dt = $dt.AddSeconds(-$dt.Second)
+    $name = ((Cut-Match $s $m) -replace '\s+', ' ').Trim()
+    if (-not $name) { $name = 'Напоминание' }
+    return @{ t = $dt.ToString($fmt, $script:inv); n = $name }
+  }
+  $date = $null; $wd = -1; $h = -1; $mi = 0
+  $m = [regex]::Match($s, '\s(сегодня|завтра|послезавтра)(?=\s|$)', $ic)
+  if ($m.Success) {
+    $w = $m.Groups[1].Value.ToLower()
+    if ($w -eq 'сегодня') { $date = $now.Date } elseif ($w -eq 'завтра') { $date = $now.Date.AddDays(1) } else { $date = $now.Date.AddDays(2) }
+    $s = Cut-Match $s $m
+  }
+  if ($null -eq $date) {
+    $m = [regex]::Match($s, '\s(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?(?=\s|$)')
+    if ($m.Success) {
+      try {
+        $dd = [int]$m.Groups[1].Value; $mo = [int]$m.Groups[2].Value
+        $yy = $now.Year; $explicit = $false
+        if ($m.Groups[3].Success) { $yy = [int]$m.Groups[3].Value; if ($yy -lt 100) { $yy += 2000 }; $explicit = $true }
+        $cand = New-Object DateTime ($yy, $mo, $dd)
+        if ((-not $explicit) -and $cand -lt $now.Date) { $cand = $cand.AddYears(1) }
+        $date = $cand
+        $s = Cut-Match $s $m
+      } catch {}
+    }
+  }
+  if ($null -eq $date) {
+    $m = [regex]::Match($s, '\s(?:(?:в|во)\s+)?(понедельник|вторник|среду?|четверг|пятницу?|субботу?|воскресенье|пн|вт|ср|чт|пт|сб|вс)(?=\s|$)', $ic)
+    if ($m.Success) { $wd = [int]$RU_WD[$m.Groups[1].Value.ToLower()]; $s = Cut-Match $s $m }
+  }
+  # time: 15:30 / в 15:30 / в 18 / в 18 часов
+  $m = [regex]::Match($s, '\s(?:в\s+)?(\d{1,2}):(\d{2})(?=\s|$)', $ic)
+  if ($m.Success -and [int]$m.Groups[1].Value -le 23 -and [int]$m.Groups[2].Value -le 59) {
+    $h = [int]$m.Groups[1].Value; $mi = [int]$m.Groups[2].Value
+    $s = Cut-Match $s $m
+  } else {
+    $m = [regex]::Match($s, '\sв\s+(\d{1,2})(?:\s*(?:час\w*|ч))?(?=\s|$)', $ic)
+    if ($m.Success -and [int]$m.Groups[1].Value -le 23) { $h = [int]$m.Groups[1].Value; $mi = 0; $s = Cut-Match $s $m }
+  }
+  if (($null -eq $date) -and $wd -lt 0 -and $h -lt 0) { return $null }
+  $name = ($s -replace '\s+', ' ').Trim()
+  $name = ($name -replace '^[\s,.:;\-–—]+', '').Trim()
+  if (-not $name) { $name = 'Событие' }
+  $hh = $h; $mm = $mi
+  if ($hh -lt 0) { $hh = 9; $mm = 0 }
+  if ($wd -ge 0) {
+    $delta = ($wd - [int]$now.DayOfWeek + 7) % 7
+    $date = $now.Date.AddDays($delta)
+    if ($delta -eq 0 -and $date.AddHours($hh).AddMinutes($mm) -le $now) { $date = $date.AddDays(7) }
+  }
+  if ($null -eq $date) {
+    $date = $now.Date
+    if ($date.AddHours($hh).AddMinutes($mm) -le $now) { $date = $date.AddDays(1) }
+  }
+  $dt = $date.AddHours($hh).AddMinutes($mm)
+  return @{ t = $dt.ToString($fmt, $script:inv); n = $name.Substring(0, [Math]::Min(120, $name.Length)) }
+}
+
+# ------------------------------------------------------------
+#  Events: own + calendar link, cached and sorted
+# ------------------------------------------------------------
+function Get-AllEvents {
+  if (-not $ui.evDirty) { return $ui.evList }
+  $out = New-Object System.Collections.ArrayList
+  $fmt = "yyyy-MM-dd'T'HH:mm"
+  foreach ($evt in @($cfg.events)) {
+    try {
+      $dt = [datetime]::ParseExact([string]$evt.t, $fmt, $script:inv)
+      [void]$out.Add(@{ dt = $dt; n = [string]$evt.n; manual = $true; ad = $false; key = ([string]$evt.t + '|' + [string]$evt.n) })
+    } catch {}
+  }
+  foreach ($evt in @($ui.icsItems)) {
+    try {
+      $dt = [datetime]::ParseExact([string]$evt.t, $fmt, $script:inv)
+      [void]$out.Add(@{ dt = $dt; n = [string]$evt.n; manual = $false; ad = [bool]$evt.ad; key = ('ics|' + [string]$evt.t + '|' + [string]$evt.n) })
+    } catch {}
+  }
+  $sorted = @($out | Sort-Object { $_.dt })
+  $ui.evList = $sorted
+  $ui.evDirty = $false
+  return $sorted
+}
+function Ev-Upcoming($evt, [datetime]$now) {
+  if ($evt.ad) { return ($evt.dt.Date -ge $now.Date) }
+  return ($evt.dt -ge $now.AddMinutes(-30))
+}
+function Fmt-Day([datetime]$dt) {
+  $diff = ($dt.Date - (Get-Date).Date).Days
+  if ($diff -eq 0) { return 'Сегодня' }
+  if ($diff -eq 1) { return 'Завтра' }
+  if ($diff -eq 2) { return 'Послезавтра' }
+  if ($diff -gt 2 -and $diff -lt 7) {
+    $w = $dt.ToString('dddd', $ruRu)
+    return $w.Substring(0, 1).ToUpper() + $w.Substring(1)
+  }
+  return (($dt.ToString('d MMM', $ruRu)) -replace '\.$', '')
+}
+function Fmt-When([datetime]$dt, [bool]$ad) {
+  $d = Fmt-Day $dt
+  if ($ad) { return "$d · весь день" }
+  return ($d + ' · ' + $dt.ToString('HH:mm', $script:inv))
+}
+function Fmt-In([datetime]$dt, [bool]$ad) {
+  $now = Get-Date
+  if ($ad) {
+    $d = ($dt.Date - $now.Date).Days
+    if ($d -le 0) { return 'Сегодня весь день' }
+    if ($d -eq 1) { return 'Завтра' }
+    return "Через $d дн."
+  }
+  $mins = [int][Math]::Floor(($dt - $now).TotalMinutes)
+  if ($mins -lt 0) { return 'Идёт сейчас' }
+  if ($mins -lt 1) { return 'Сейчас' }
+  if ($mins -lt 60) { return "Через $mins мин" }
+  if ($mins -lt 1440) {
+    $hh = [int][Math]::Floor($mins / 60); $rm = $mins % 60
+    if ($rm -eq 0) { return "Через $hh ч" }
+    return "Через $hh ч $rm мин"
+  }
+  $dd = [int][Math]::Floor($mins / 1440)
+  return "Через $dd дн."
+}
+
+# the big card with the next event
+function Refresh-Hero([bool]$animate = $true) {
+  if ((Now-Ms) -lt $ui.heroErrUntil) { return }
+  $now = Get-Date
+  $next = $null
+  foreach ($evt in @(Get-AllEvents)) { if (Ev-Upcoming $evt $now) { $next = $evt; break } }
+  if ($next) {
+    $key = $next.key
+    $E.evHeroIn.Text = (Fmt-In $next.dt $next.ad)
+    $soon = ((-not $next.ad) -and (($next.dt - $now).TotalMinutes -lt 60))
+    $E.evHeroIn.Foreground = $(if ($soon) { $script:brOrange } else { $script:brGreen })
+    $E.evHeroTitle.Text = $next.n
+    $E.evHeroWhen.Text = (Fmt-When $next.dt $next.ad)
+  } else {
+    $key = 'none'
+    $E.evHeroIn.Text = 'Свободно'
+    $E.evHeroIn.Foreground = $script:brSoft
+    $E.evHeroTitle.Text = 'Событий пока нет'
+    $E.evHeroWhen.Text = 'Добавь первое ниже: «завтра 15:30 Созвон»'
+  }
+  if ($key -ne $ui.heroKey) {
+    $ui.heroKey = $key
+    if ($animate -and (-not $ui.reduceMotion)) {
+      Set-Op $E.evHero 0.0
+      FadeTo $E.evHero 1.0 300
+      Pulse-Scale $E.evHero 0.965 460
+    }
+  }
+}
+function Hero-Error([string]$msg) {
+  $ui.heroErrUntil = (Now-Ms) + 3200
+  $E.evHeroIn.Text = 'Не понял время'
+  $E.evHeroIn.Foreground = $script:brRed
+  $E.evHeroWhen.Text = $msg
+  Pulse-Scale $E.evHero 0.97 380
+  Later 3300 { $ui.heroKey = '#'; Refresh-Hero $true }
+}
+
+function New-EventRow($evt) {
+  $row = New-Object System.Windows.Controls.Grid
+  $row.Margin = [System.Windows.Thickness]::new(0, 0, 0, 5)
+  $row.Background = [System.Windows.Media.Brushes]::Transparent
+  $bd = New-Object System.Windows.Controls.Border
+  $bd.CornerRadius = [System.Windows.CornerRadius]::new(14)
+  $bd.Background = New-Br '#10FFFFFF'
+  $bd.Padding = [System.Windows.Thickness]::new(12, 8, 12, 8)
+  $g = New-Object System.Windows.Controls.Grid
+  $c0 = New-Object System.Windows.Controls.ColumnDefinition; $c0.Width = [System.Windows.GridLength]::new(86)
+  $c1 = New-Object System.Windows.Controls.ColumnDefinition
+  [void]$g.ColumnDefinitions.Add($c0); [void]$g.ColumnDefinitions.Add($c1)
+  $when = New-Tb $(if ($evt.ad) { (Fmt-Day $evt.dt) } else { (Fmt-Day $evt.dt) + ' ' + $evt.dt.ToString('HH:mm', $script:inv) }) 10.5 $script:brSoft
+  $when.TextTrimming = 'CharacterEllipsis'; $when.VerticalAlignment = 'Center'
+  $nm = New-Tb $evt.n 12.5 $script:brWhite
+  $nm.TextTrimming = 'CharacterEllipsis'; $nm.VerticalAlignment = 'Center'
+  if ($evt.manual) { $nm.Margin = [System.Windows.Thickness]::new(0, 0, 24, 0) }
+  [System.Windows.Controls.Grid]::SetColumn($nm, 1)
+  [void]$g.Children.Add($when); [void]$g.Children.Add($nm)
+  $bd.Child = $g
+  [void]$row.Children.Add($bd)
+  if ($evt.manual) {
+    $x = New-XButton 22.0
+    $x.Margin = [System.Windows.Thickness]::new(0, 0, 6, 0)
+    $x.Tag = [string]$evt.key
+    $x.Add_Click({ param($snd, $ev) $ev.Handled = $true; Remove-Event ([string]$snd.Tag) $snd.Parent })
+    [void]$row.Children.Add($x)
+    $row.Add_MouseEnter({ param($snd, $ev) FadeTo $snd.Children[1] 1.0 140 })
+    $row.Add_MouseLeave({ param($snd, $ev) FadeTo $snd.Children[1] 0.0 200 })
+  }
+  return $row
+}
+function Build-Events([string]$onlyKey = '') {
+  $now = Get-Date
+  # forget our own events that ended more than 6 hours ago
+  $old = @($cfg.events | Where-Object {
+      $keep = $true
+      try { $keep = ([datetime]::ParseExact([string]$_.t, "yyyy-MM-dd'T'HH:mm", $script:inv) -gt $now.AddHours(-6)) } catch {}
+      $keep
+    })
+  if ($old.Count -ne @($cfg.events).Count) { $cfg.events = $old; $ui.evDirty = $true; Request-Save }
+  $h = $E.evHost
+  $h.Children.Clear()
+  $all = @(Get-AllEvents)
+  $shown = 0; $first = $true
+  foreach ($evt in $all) {
+    if (-not (Ev-Upcoming $evt $now)) { continue }
+    if ($first) { $first = $false; continue }     # the first one lives in the big card
+    if ($shown -ge 10) { break }
+    $r = New-EventRow $evt
+    [void]$h.Children.Add($r)
+    if ($onlyKey -eq '' -or $evt.key -eq $onlyKey) { Pop-In $r $shown 7 }
+    $shown++
+  }
+  Refresh-Hero $true
+}
+function Add-Event {
+  $txt = $E.evIn.Text.Trim()
+  if (-not $txt) { return }
+  $p = Parse-Event $txt
+  if (-not $p) { Hero-Error 'Напиши время: «завтра 15:30 Созвон», «через 20 мин чай»'; return }
+  $cfg.events = @($cfg.events) + (, @{ t = [string]$p.t; n = [string]$p.n })
+  $cfg.events = @($cfg.events | Sort-Object { $_.t } | Select-Object -Last 60)
+  $ui.evDirty = $true
+  Request-Save
+  $E.evIn.Text = ''
+  $ui.heroErrUntil = 0.0
+  Build-Events ([string]$p.t + '|' + [string]$p.n)
+}
+function Remove-Event([string]$key, $row) {
+  $done = $false
+  $new = @()
+  foreach ($evt in @($cfg.events)) {
+    if ((-not $done) -and (([string]$evt.t + '|' + [string]$evt.n) -eq $key)) { $done = $true; continue }
+    $new += , $evt
+  }
+  $cfg.events = $new
+  $ui.evDirty = $true
+  Request-Save
+  if ($row) { Pop-Out $row 170 }
+  Later 190 { if ($ui.expanded -and $ui.tab -eq 'todo') { Build-Events } }
+}
+$E.evIn.Add_KeyDown({
+  param($snd, $ev)
+  if ($ev.Key -eq [System.Windows.Input.Key]::Return) { Add-Event; $ev.Handled = $true }
+})
+
+# reminders: 5 minutes before and at the start (a pill with sound)
+function Notify-Event([string]$text, [bool]$now) {
+  $E.cEventTxt.Text = $text
+  $ui.evtUntil = (Now-Ms) + 7000
+  try { if ($now) { [System.Media.SystemSounds]::Exclamation.Play() } else { [System.Media.SystemSounds]::Asterisk.Play() } } catch {}
+  Update-Mode
+}
+function Check-Reminders {
+  $now = Get-Date
+  foreach ($evt in @(Get-AllEvents)) {
+    if ($evt.ad) { continue }
+    $mins = ($evt.dt - $now).TotalMinutes
+    if ($mins -gt 5.5 -or $mins -lt -3) { continue }
+    $nm = [string]$evt.n
+    if ($nm.Length -gt 26) { $nm = $nm.Substring(0, 25) + '…' }
+    if ($mins -le 0) {
+      $k = $evt.key + '|now'
+      if (-not $ui.notified[$k]) { $ui.notified[$k] = $true; Notify-Event ("Сейчас · $nm") $true }
+    } elseif ($mins -le 5) {
+      $k = $evt.key + '|pre'
+      if (-not $ui.notified[$k]) {
+        $ui.notified[$k] = $true
+        Notify-Event ("Через " + [int][Math]::Ceiling($mins) + " мин · $nm") $false
+      }
+    }
+  }
+  if ($ui.notified.Count -gt 300) { $ui.notified.Clear() }
+}
+# the "Через 12 мин" label stays fresh while the tab is open
+function Events-Tick {
+  $n = Now-Ms
+  if (($n - $ui.heroAt) -lt 4000) { return }
+  $ui.heroAt = $n
+  Refresh-Hero $true
+}
+
+# ------------------------------------------------------------
+#  Calendar link (ICS)
+# ------------------------------------------------------------
+function Ics-Request {
+  $url = ([string]$cfg.icsUrl).Trim()
+  if (-not $url) { return }
+  $ui.icsSeq++
+  $ui.icsAt = Utc-Ms
+  $sync.IcsReq = @{ seq = $ui.icsSeq; url = $url }
+}
+function Ics-Info([string]$text, [bool]$bad = $false) {
+  $E.icsInfo.Text = $text
+  $E.icsInfo.Foreground = $(if ($bad) { $script:brTmpHot } else { $script:brSoft })
+}
+function Ics-Tick {
+  $url = ([string]$cfg.icsUrl).Trim()
+  if ($url -and (((Utc-Ms) - $ui.icsAt) -gt 1800000.0)) { Ics-Request }
+  $r = $sync.Ics
+  if ($r -and (-not [object]::ReferenceEquals($r, $ui.icsRef)) -and ([int]$r.seq -eq $ui.icsSeq)) {
+    $ui.icsRef = $r
+    if ($r.ok) {
+      $ui.icsItems = @($r.items)
+      $ui.evDirty = $true
+      Ics-Info ("Подключено. Событий на 45 дней вперёд: " + @($r.items).Count)
+      if ($ui.expanded -and $ui.tab -eq 'todo') { Build-Events }
+    } else {
+      Ics-Info 'Не удалось загрузить календарь. Проверь ссылку и интернет' $true
+    }
+  }
+}
+function Save-Ics {
+  $u = $E.icsIn.Text.Trim()
+  if ($u -match '^webcal://') { $u = 'https://' + $u.Substring(9) }
+  if ($u -and ($u -notmatch '^https?://')) { Ics-Info 'Нужна ссылка вида https://…' $true; return }
+  $cfg.icsUrl = $u
+  Request-Save
+  $ui.icsItems = @(); $ui.evDirty = $true
+  if ($u) { Ics-Info 'Загружаю календарь…'; Ics-Request } else { Ics-Info 'Календарь отключён' }
+}
+$E.icsIn.Text = [string]$cfg.icsUrl
+if ($cfg.icsUrl) { Ics-Info 'Календарь подключён' }
+$E.btnIcsSave.Add_Click({ Save-Ics })
+$E.icsIn.Add_KeyDown({
+  param($snd, $ev)
+  if ($ev.Key -eq [System.Windows.Input.Key]::Return) { Save-Ics; $ev.Handled = $true }
+})
+
+# ------------------------------------------------------------
+#  To-do list and notes
+# ------------------------------------------------------------
+function Todo-Look($tg, [bool]$done, [bool]$animate) {
+  $fillC = $(if ($done) { $script:colGreen } else { $script:colClear })
+  $ringC = $(if ($done) { $script:colGreen } else { $script:colRing })
+  $op = $(if ($done) { 0.45 } else { 1.0 })
+  if ($animate) {
+    Anim-Color $tg.ell.Fill $fillC 240
+    Anim-Color $tg.ell.Stroke $ringC 240
+    FadeTo $tg.ck $(if ($done) { 1.0 } else { 0.0 }) 200
+    FadeTo $tg.txt $op 260
+  } else {
+    $tg.ell.Fill.Color = $fillC
+    $tg.ell.Stroke.Color = $ringC
+    Set-Op $tg.ck $(if ($done) { 1.0 } else { 0.0 })
+    Set-Op $tg.txt $op
+  }
+  $tg.txt.TextDecorations = $(if ($done) { [System.Windows.TextDecorations]::Strikethrough } else { $null })
+}
+function Todo-Count-Update {
+  $all = @($cfg.todos)
+  if ($all.Count -eq 0) { $E.tdCount.Text = ''; return }
+  $left = @($all | Where-Object { -not $_.d }).Count
+  $E.tdCount.Text = "Осталось $left из $($all.Count)"
+}
+function New-TodoRow($t) {
+  $done = [bool]$t.d
+  $row = New-Object System.Windows.Controls.Grid
+  $row.Margin = [System.Windows.Thickness]::new(0, 0, 0, 2)
+  $row.Background = [System.Windows.Media.Brushes]::Transparent
+  $cA = New-Object System.Windows.Controls.ColumnDefinition; $cA.Width = [System.Windows.GridLength]::Auto
+  $cB = New-Object System.Windows.Controls.ColumnDefinition
+  $cC = New-Object System.Windows.Controls.ColumnDefinition; $cC.Width = [System.Windows.GridLength]::Auto
+  [void]$row.ColumnDefinitions.Add($cA); [void]$row.ColumnDefinitions.Add($cB); [void]$row.ColumnDefinitions.Add($cC)
+  # the round check box
+  $chk = New-Object System.Windows.Controls.Button
+  $chk.Style = $E.tdHost.FindResource('IcoBtn')
+  $chk.Width = 30; $chk.Height = 30
+  $chk.Background = [System.Windows.Media.Brushes]::Transparent
+  $chk.VerticalAlignment = 'Top'
+  $g = New-Object System.Windows.Controls.Grid
+  $g.Width = 20; $g.Height = 20
+  $ell = New-Object System.Windows.Shapes.Ellipse
+  $ell.Width = 20; $ell.Height = 20; $ell.StrokeThickness = 1.7
+  $ell.Stroke = New-Object System.Windows.Media.SolidColorBrush $script:colRing
+  $ell.Fill = New-Object System.Windows.Media.SolidColorBrush $script:colClear
+  $ck = New-Object System.Windows.Shapes.Path
+  $ck.Data = [System.Windows.Media.Geometry]::Parse('M5.5 10.5 L8.8 13.8 L14.8 6.8')
+  $ck.Stroke = $script:brWhite; $ck.StrokeThickness = 2.0
+  $ck.StrokeStartLineCap = 'Round'; $ck.StrokeEndLineCap = 'Round'; $ck.StrokeLineJoin = 'Round'
+  $ck.Opacity = 0.0
+  [void]$g.Children.Add($ell); [void]$g.Children.Add($ck)
+  $chk.Content = $g
+  $txt = New-Tb ([string]$t.t) 13 $script:brWhite
+  $txt.TextWrapping = 'Wrap'; $txt.VerticalAlignment = 'Top'
+  $txt.Margin = [System.Windows.Thickness]::new(6, 6, 6, 6)
+  [System.Windows.Controls.Grid]::SetColumn($txt, 1)
+  $chk.Tag = @{ id = [string]$t.id; ell = $ell; ck = $ck; txt = $txt }
+  $chk.Add_Click({ param($snd, $ev) $ev.Handled = $true; Todo-Toggle $snd })
+  $del = New-XButton 22.0
+  $del.VerticalAlignment = 'Top'
+  $del.Margin = [System.Windows.Thickness]::new(0, 4, 2, 0)
+  [System.Windows.Controls.Grid]::SetColumn($del, 2)
+  $del.Tag = [string]$t.id
+  $del.Add_Click({ param($snd, $ev) $ev.Handled = $true; Todo-Remove ([string]$snd.Tag) $snd.Parent })
+  [void]$row.Children.Add($chk); [void]$row.Children.Add($txt); [void]$row.Children.Add($del)
+  $row.Add_MouseEnter({ param($snd, $ev) FadeTo $snd.Children[2] 1.0 140 })
+  $row.Add_MouseLeave({ param($snd, $ev) FadeTo $snd.Children[2] 0.0 200 })
+  Todo-Look $chk.Tag $done $false
+  return $row
+}
+function Build-Todos([bool]$animate = $true, [string]$onlyId = '') {
+  $h = $E.tdHost
+  $h.Children.Clear()
+  $items = @($cfg.todos)
+  $open = @($items | Where-Object { -not $_.d })
+  $done = @($items | Where-Object { $_.d })
+  $i = 0
+  foreach ($t in (@($open) + @($done))) {
+    $r = New-TodoRow $t
+    [void]$h.Children.Add($r)
+    if ($animate -and (($onlyId -eq '') -or ($t.id -eq $onlyId))) { Pop-In $r $i 7 }
+    $i++
+  }
+  $E.tdEmpty.Visibility = $(if ($items.Count -eq 0) { 'Visible' } else { 'Collapsed' })
+  Todo-Count-Update
+}
+function Todo-Toggle($btn) {
+  $tg = $btn.Tag
+  $item = $null
+  foreach ($x in @($cfg.todos)) { if ($x.id -eq $tg.id) { $item = $x; break } }
+  if (-not $item) { return }
+  $item.d = (-not [bool]$item.d)
+  Request-Save
+  Todo-Look $tg ([bool]$item.d) $true
+  Todo-Count-Update
+  Later 560 { if ($ui.expanded -and $ui.tab -eq 'todo') { Build-Todos $false } }
+}
+function Todo-Remove([string]$id, $row) {
+  $cfg.todos = @($cfg.todos | Where-Object { $_.id -ne $id })
+  Request-Save
+  if ($row) { Pop-Out $row 170 }
+  Todo-Count-Update
+  Later 190 { if ($ui.expanded -and $ui.tab -eq 'todo') { Build-Todos $false } }
+}
+function Add-Todo {
+  $t = $E.tdIn.Text.Trim()
+  if (-not $t) { return }
+  $id = New-Id
+  $item = @{ id = $id; t = $t.Substring(0, [Math]::Min(160, $t.Length)); d = $false }
+  $cfg.todos = @(@($item) + @($cfg.todos) | Select-Object -First 80)
+  Request-Save
+  $E.tdIn.Text = ''
+  Build-Todos $true $id
+}
+$E.tdIn.Add_KeyDown({
+  param($snd, $ev)
+  if ($ev.Key -eq [System.Windows.Input.Key]::Return) { Add-Todo; $ev.Handled = $true }
+})
+
+# text boxes grab the keyboard on the first click; Esc clears, then lets go
+foreach ($tbx in @($E.evIn, $E.tdIn, $E.clipQ, $E.icsIn, $E.wxQuery)) { Hook-Kbd $tbx }
+Set-Hint $E.icsIn $E.icsInHint
+foreach ($tbx in @($E.evIn, $E.tdIn, $E.clipQ, $E.icsIn)) {
+  $tbx.Add_KeyDown({
+    param($snd, $ev)
+    if ($ev.Key -eq [System.Windows.Input.Key]::Escape) {
+      if ($snd.Text) { $snd.Text = '' } else { End-Kbd }
+      $ev.Handled = $true
+    }
+  })
+}
+
+} catch { Log ("init c4b failed: " + $_.Exception.Message + " @ line " + $_.InvocationInfo.ScriptLineNumber) }
+try {
+
+# ============================================================
+#  Sound: per-application volume (Windows volume mixer) — every app gets its own slider
+# ============================================================
+$ui.mix = @{}; $ui.mixById = @{}; $ui.mixN = 0; $ui.mixAt = 0.0; $ui.mixErrLogged = $false
+$script:brDimWhite = New-Br '#33FFFFFF'
+$script:brFillWhite = New-Br '#F2F2F2'
+$script:brSpeaker = New-Br '#F2FFFFFF'
+$MIX_NAMES = @{
+  'chrome' = 'Google Chrome'; 'msedge' = 'Microsoft Edge'; 'firefox' = 'Firefox'; 'opera' = 'Opera'; 'opera_gx' = 'Opera GX'
+  'brave' = 'Brave'; 'browser' = 'Яндекс Браузер'; 'yandex' = 'Яндекс Браузер'; 'vivaldi' = 'Vivaldi'
+  'spotify' = 'Spotify'; 'discord' = 'Discord'; 'telegram' = 'Telegram'; 'vlc' = 'VLC'; 'steam' = 'Steam'
+  'obs64' = 'OBS Studio'; 'zoom' = 'Zoom'; 'teams' = 'Teams'; 'ms-teams' = 'Teams'; 'wmplayer' = 'Проигрыватель Windows'
+  'яндекс музыка' = 'Яндекс Музыка'; 'yandexmusic' = 'Яндекс Музыка'; 'applemusic' = 'Apple Music'; 'itunes' = 'iTunes'
+  'whatsapp' = 'WhatsApp'; 'skype' = 'Skype'; 'code' = 'VS Code'; 'epicgameslauncher' = 'Epic Games'; 'javaw' = 'Minecraft'
+  'gta5' = 'GTA V'; 'cs2' = 'Counter-Strike 2'; 'dota2' = 'Dota 2'; 'valorant-win64-shipping' = 'Valorant'
+}
+function Mix-Label($it) {
+  if ($it.System) { return 'Системные звуки' }
+  $n = [string]$it.Name
+  $k = $n.ToLower()
+  if ($MIX_NAMES.ContainsKey($k)) { return [string]$MIX_NAMES[$k] }
+  if ($n.Length -gt 0) { return $n.Substring(0, 1).ToUpper() + $n.Substring(1) }
+  return '?'
+}
+
+# a slider built in code: the same parts and names as the ones in the XAML, so Add-Slider works on it
+function New-SliderParts([string]$sid, [double]$w) {
+  $hit = New-Object System.Windows.Controls.Grid
+  $hit.Name = "${sid}Hit"; $hit.Width = $w; $hit.Height = 28
+  $hit.Background = [System.Windows.Media.Brushes]::Transparent
+  $hit.Cursor = [System.Windows.Input.Cursors]::Hand
+  $track = New-Object System.Windows.Controls.Border
+  $track.Name = "${sid}Track"; $track.Height = 6; $track.CornerRadius = [System.Windows.CornerRadius]::new(5)
+  $track.Background = $script:brDimWhite; $track.VerticalAlignment = 'Center'; $track.IsHitTestVisible = $false
+  $fill = New-Object System.Windows.Controls.Border
+  $fill.Name = "${sid}Fill"; $fill.Height = 6; $fill.CornerRadius = [System.Windows.CornerRadius]::new(5)
+  $fill.Background = $script:brFillWhite; $fill.HorizontalAlignment = 'Left'; $fill.VerticalAlignment = 'Center'
+  $fill.Width = 0; $fill.IsHitTestVisible = $false
+  $knob = New-Object System.Windows.Shapes.Ellipse
+  $knob.Name = "${sid}Knob"; $knob.Width = 14; $knob.Height = 14; $knob.Fill = [System.Windows.Media.Brushes]::White
+  $knob.HorizontalAlignment = 'Left'; $knob.VerticalAlignment = 'Center'; $knob.Opacity = 0.0
+  $knob.RenderTransformOrigin = [System.Windows.Point]::new(0.5, 0.5); $knob.IsHitTestVisible = $false
+  $tg = New-Object System.Windows.Media.TransformGroup
+  [void]$tg.Children.Add((New-Object System.Windows.Media.ScaleTransform (0.5, 0.5)))
+  [void]$tg.Children.Add((New-Object System.Windows.Media.TranslateTransform))
+  $knob.RenderTransform = $tg
+  # the bubble is not used here (the percentage sits next to the slider); the parts only have to exist
+  $tip = New-Object System.Windows.Controls.Border
+  $tip.Name = "${sid}Tip"; $tip.Opacity = 0.0; $tip.Visibility = 'Collapsed'; $tip.IsHitTestVisible = $false
+  $tip.RenderTransform = New-Object System.Windows.Media.TranslateTransform
+  $tipTxt = New-Object System.Windows.Controls.TextBlock
+  $tipTxt.Name = "${sid}TipTxt"
+  $tip.Child = $tipTxt
+  foreach ($el in @($track, $fill, $knob, $tip)) { [void]$hit.Children.Add($el) }
+  $E["${sid}Hit"] = $hit; $E["${sid}Track"] = $track; $E["${sid}Fill"] = $fill
+  $E["${sid}Knob"] = $knob; $E["${sid}Tip"] = $tip; $E["${sid}TipTxt"] = $tipTxt
+  return $hit
+}
+
+function Mix-Apply($r, [double]$f, [bool]$force) {
+  $r.pct.Text = "$([int][Math]::Round($f * 100.0))%"
+  $now = Now-Ms
+  if ((-not $force) -and (($now - $r.at) -lt 45)) { return }   # the COM call walks all sessions: not on every mouse move
+  $r.at = $now
+  $rc = [DI.Mixer]::SetVol([string]$r.name, [float]$f)
+  if ($rc -ne 0 -and (-not $ui.mixErrLogged)) { $ui.mixErrLogged = $true; Log ("mixer set failed (" + $r.name + "): " + [DI.Mixer]::LastError) }
+  $r.vol = $f
+  if ($r.muted -and $f -gt 0.0) { [void][DI.Mixer]::SetMute([string]$r.name, $false); Mix-SetMuted $r $false }
+}
+function Mix-SetMuted($r, [bool]$m) {
+  $r.muted = $m
+  $r.x.Visibility = $(if ($m) { 'Visible' } else { 'Collapsed' })
+  $r.wave.Visibility = $(if ($m) { 'Collapsed' } else { 'Visible' })
+  FadeTo $r.slider $(if ($m) { 0.4 } else { 1.0 }) 220
+}
+function Mix-SetStatus($r, [bool]$active, [bool]$sys) {
+  if ($r.active -eq $active -and $r.statusSet) { return }
+  $r.active = $active; $r.statusSet = $true
+  if ($sys) { $r.st.Text = 'Звуки Windows'; $r.st.Foreground = $script:brSoft; return }
+  $r.st.Text = $(if ($active) { 'Сейчас играет' } else { 'Тихо' })
+  $r.st.Foreground = $(if ($active) { $script:brGreen } else { $script:brDim })
+}
+
+function New-MixRow($it, [string]$key) {
+  $ui.mixN++
+  $sid = "mx$($ui.mixN)"
+  $sys = [bool]$it.System
+  $r = @{ sid = $sid; key = $key; name = [string]$it.Name; sys = $sys; vol = [double]$it.Vol; muted = $false; at = 0.0; active = $false; statusSet = $false; init = $false }
+  $el = New-Object System.Windows.Controls.Border
+  $el.CornerRadius = [System.Windows.CornerRadius]::new(20)
+  $el.Background = New-Br '#14FFFFFF'
+  $el.BorderBrush = New-Br '#1CFFFFFF'
+  $el.BorderThickness = [System.Windows.Thickness]::new(1)
+  $el.Padding = [System.Windows.Thickness]::new(12, 9, 14, 9)
+  $el.Margin = [System.Windows.Thickness]::new(0, 0, 0, 8)
+  $g = New-Object System.Windows.Controls.Grid
+  foreach ($wd in @('Auto', '168', '*', '46', 'Auto')) {
+    $cd = New-Object System.Windows.Controls.ColumnDefinition
+    if ($wd -eq 'Auto') { $cd.Width = [System.Windows.GridLength]::Auto }
+    elseif ($wd -eq '*') { $cd.Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star) }
+    else { $cd.Width = [System.Windows.GridLength]::new([double]$wd) }
+    [void]$g.ColumnDefinitions.Add($cd)
+  }
+  # coloured plate with the first letter (or a speaker for system sounds)
+  $label = Mix-Label $it
+  $sum = 0
+  foreach ($ch in $label.ToCharArray()) { $sum += [int]$ch }
+  $plate = New-Object System.Windows.Controls.Border
+  $plate.Width = 36; $plate.Height = 36; $plate.CornerRadius = [System.Windows.CornerRadius]::new(11)
+  $plate.Background = (New-Br ([string]$SITE_COLORS[$sum % $SITE_COLORS.Count]))
+  $lt = New-Tb $(if ($sys) { '♪' } else { $label.Substring(0, 1).ToUpper() }) 16 $script:brWhite 'SemiBold'
+  $lt.HorizontalAlignment = 'Center'; $lt.VerticalAlignment = 'Center'
+  $plate.Child = $lt
+  [void]$g.Children.Add($plate)
+  # name + state
+  $spn = New-Object System.Windows.Controls.StackPanel
+  $spn.VerticalAlignment = 'Center'; $spn.Margin = [System.Windows.Thickness]::new(12, 0, 8, 0)
+  $nm = New-Tb $label 13 $script:brWhite 'SemiBold'
+  $nm.TextTrimming = 'CharacterEllipsis'
+  $st = New-Tb '' 10.5 $script:brSoft
+  $st.Margin = [System.Windows.Thickness]::new(0, 2, 0, 0)
+  [void]$spn.Children.Add($nm); [void]$spn.Children.Add($st)
+  [System.Windows.Controls.Grid]::SetColumn($spn, 1)
+  [void]$g.Children.Add($spn)
+  # slider
+  $hit = New-SliderParts $sid 248.0
+  $hit.HorizontalAlignment = 'Center'; $hit.VerticalAlignment = 'Center'
+  [System.Windows.Controls.Grid]::SetColumn($hit, 2)
+  [void]$g.Children.Add($hit)
+  # percentage
+  $pct = New-Tb '' 13 $script:brWhite 'SemiBold'
+  $pct.TextAlignment = 'Right'; $pct.VerticalAlignment = 'Center'
+  [System.Windows.Controls.Grid]::SetColumn($pct, 3)
+  [void]$g.Children.Add($pct)
+  # mute button
+  $mb = New-Object System.Windows.Controls.Button
+  $mb.Style = $E.mixHost.FindResource('IcoBtn')
+  $mb.Width = 34; $mb.Height = 34; $mb.Margin = [System.Windows.Thickness]::new(10, 0, 0, 0)
+  $mb.Background = $script:brIcoBg
+  $vb = New-Object System.Windows.Controls.Viewbox
+  $vb.Width = 17; $vb.Height = 17
+  $cv = New-Object System.Windows.Controls.Canvas
+  $cv.Width = 24; $cv.Height = 24
+  $sp1 = New-Object System.Windows.Shapes.Path
+  $sp1.Data = [System.Windows.Media.Geometry]::Parse('M11 5 6.5 9H3v6h3.5L11 19z'); $sp1.Fill = $script:brSpeaker
+  $wave = New-Object System.Windows.Shapes.Path
+  $wave.Data = [System.Windows.Media.Geometry]::Parse('M15.5 8.5a5 5 0 0 1 0 7 M18.5 5.5a9 9 0 0 1 0 13')
+  $wave.Stroke = $script:brSpeaker; $wave.StrokeThickness = 2; $wave.StrokeStartLineCap = 'Round'; $wave.StrokeEndLineCap = 'Round'
+  $xx = New-Object System.Windows.Shapes.Path
+  $xx.Data = [System.Windows.Media.Geometry]::Parse('M15 9.5l5 5 M20 9.5l-5 5')
+  $xx.Stroke = $script:brRed; $xx.StrokeThickness = 2; $xx.StrokeStartLineCap = 'Round'; $xx.StrokeEndLineCap = 'Round'; $xx.Visibility = 'Collapsed'
+  foreach ($p in @($sp1, $wave, $xx)) { [void]$cv.Children.Add($p) }
+  $vb.Child = $cv
+  $mb.Content = $vb
+  [System.Windows.Controls.Grid]::SetColumn($mb, 4)
+  $mb.Tag = $r
+  $mb.Add_Click({
+    param($snd, $ev)
+    $rr = $snd.Tag
+    $m = (-not [bool]$rr.muted)
+    [void][DI.Mixer]::SetMute([string]$rr.name, $m)
+    Mix-SetMuted $rr $m
+  })
+  [void]$g.Children.Add($mb)
+  $el.Child = $g
+  $r.el = $el; $r.pct = $pct; $r.st = $st; $r.slider = $hit; $r.wave = $wave; $r.x = $xx
+  $ui.mixById[$sid] = $r
+  Add-Slider $sid {
+    param($f, $id)
+    $rr = $ui.mixById[$id]
+    if ($rr) { Mix-Apply $rr $f $false }
+  } {
+    param($f, $id)
+    $rr = $ui.mixById[$id]
+    if ($rr) { Mix-Apply $rr $f $true }
+  } {
+    param($f)
+    "$([int][Math]::Round($f * 100.0))%"
+  } $false 0.04
+  return $r
+}
+
+function Mix-Update($r, $it) {
+  $vol = [double]$it.Vol
+  $r.pct.Text = "$([int][Math]::Round($vol * 100.0))%"
+  if (-not $SL[$r.sid].drag) {
+    if ((-not $r.init) -or ([Math]::Abs($SL[$r.sid].frac - $vol) -gt 0.006)) {
+      Slider-Set $r.sid $vol ([bool]$r.init)
+    }
+    $r.vol = $vol
+  }
+  $r.init = $true
+  if ([bool]$it.Muted -ne [bool]$r.muted) { Mix-SetMuted $r ([bool]$it.Muted) }
+  Mix-SetStatus $r ([bool]$it.Active) ([bool]$it.System)
+}
+function Mix-Sweep {
+  foreach ($c in @($E.mixHost.Children)) { if ($c.Tag -eq 'gone') { $E.mixHost.Children.Remove($c) } }
+}
+function Mixer-Poll {
+  if (-not ($ui.expanded -and (-not $ui.closing) -and $ui.tab -eq 'sound')) { return }
+  $now = Now-Ms
+  if (($now - $ui.mixAt) -lt 700) { return }
+  $ui.mixAt = $now
+  $items = @([DI.Mixer]::List())
+  $seen = @{}
+  foreach ($it in $items) {
+    if (-not $it) { continue }
+    $key = $(if ($it.System) { '#sys' } else { ([string]$it.Name).ToLower() })
+    $seen[$key] = $true
+    $r = $ui.mix[$key]
+    if (-not $r) {
+      $r = New-MixRow $it $key
+      $ui.mix[$key] = $r
+      [void]$E.mixHost.Children.Add($r.el)
+      Pop-In $r.el ($E.mixHost.Children.Count - 1) 8
+    }
+    Mix-Update $r $it
+  }
+  $gone = $false
+  foreach ($k in @($ui.mix.Keys)) {
+    if (-not $seen[$k]) {
+      $r = $ui.mix[$k]
+      $r.el.Tag = 'gone'
+      Pop-Out $r.el 170
+      [void]$ui.mixById.Remove($r.sid)
+      [void]$SL.Remove($r.sid)
+      [void]$ui.mix.Remove($k)
+      $gone = $true
+    }
+  }
+  if ($gone) { Later 200 { Mix-Sweep } }
+  $E.mixEmpty.Visibility = $(if ($ui.mix.Count -eq 0) { 'Visible' } else { 'Collapsed' })
+}
+
+} catch { Log ("init c4c failed: " + $_.Exception.Message + " @ line " + $_.InvocationInfo.ScriptLineNumber) }
+try {
+
+# ============================================================
+#  Clipboard: history + pinned + search
+# ============================================================
+$script:colGold = [System.Windows.Media.Color]::FromRgb(255, 214, 10)
+$script:colStarOff = [System.Windows.Media.Color]::FromArgb(0x99, 255, 255, 255)
+$script:colCardBase = [System.Windows.Media.Color]::FromArgb(0x12, 255, 255, 255)
+$script:colCardPin = [System.Windows.Media.Color]::FromArgb(0x26, 255, 214, 10)
+$script:colCardOk = [System.Windows.Media.Color]::FromArgb(0x78, 48, 209, 88)
+$ui.clipRef = $null
+$STAR_PATH = 'M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z'
+
+function Copy-Text([string]$t) {
+  $sync.ClipWrite = $t     # tells the worker this is our own write: the history keeps its order
+  for ($i = 0; $i -lt 3; $i++) {
+    try { [System.Windows.Clipboard]::SetDataObject($t, $true); return $true }
+    catch { Start-Sleep -Milliseconds 40 }
+  }
+  Log 'clipboard write failed'
+  $sync.ClipWrite = ''
+  return $false
+}
+function Clip-Preview([string]$s) {
+  $t = ($s -replace '\s+', ' ').Trim()
+  if ($t.Length -gt 170) { $t = $t.Substring(0, 170) + '…' }
+  return $t
+}
+function Clip-Pin([string]$text) {
+  $pins = @($cfg.pins)
+  if ($pins -ccontains $text) { $cfg.pins = @($pins | Where-Object { $_ -cne $text }) }
+  else { $cfg.pins = @(@($text) + $pins | Select-Object -First 20) }
+  Request-Save
+  Build-Clip $false
+}
+function New-ClipRow($text, [bool]$pinned) {
+  $w = New-Object System.Windows.Controls.Grid
+  $card = New-Object System.Windows.Controls.Button
+  $card.Style = $E.clipHost.FindResource('ClipCard')
+  $card.Content = (Clip-Preview $text)
+  $card.Tag = $text
+  $card.Margin = [System.Windows.Thickness]::new(0, 0, 34, 0)
+  $card.Background = New-Object System.Windows.Media.SolidColorBrush $(if ($pinned) { $script:colCardPin } else { $script:colCardBase })
+  $card.Add_Click({
+    param($snd, $ev)
+    if (Copy-Text ([string]$snd.Tag)) {
+      # a short green flash says "copied"
+      Clip-Restore
+      Anim-Color $snd.Background $script:colCardOk 120
+      Later 460 { Clip-Restore }
+      $ui.clipFlash = $snd
+    }
+  })
+  $star = New-Object System.Windows.Controls.Button
+  $star.Style = $E.clipHost.FindResource('IcoBtn')
+  $star.Width = 26; $star.Height = 26
+  $star.Background = [System.Windows.Media.Brushes]::Transparent
+  $star.HorizontalAlignment = 'Right'; $star.VerticalAlignment = 'Top'
+  $star.Margin = [System.Windows.Thickness]::new(0, 3, 4, 0)
+  $vb = New-Object System.Windows.Controls.Viewbox
+  $vb.Width = 15; $vb.Height = 15
+  $cv = New-Object System.Windows.Controls.Canvas
+  $cv.Width = 24; $cv.Height = 24
+  $spn = New-Object System.Windows.Shapes.Path
+  $spn.Data = [System.Windows.Media.Geometry]::Parse($STAR_PATH)
+  $spn.StrokeThickness = 1.8; $spn.StrokeLineJoin = 'Round'
+  $spn.Stroke = New-Object System.Windows.Media.SolidColorBrush $(if ($pinned) { $script:colGold } else { $script:colStarOff })
+  $spn.Fill = New-Object System.Windows.Media.SolidColorBrush $(if ($pinned) { $script:colGold } else { [System.Windows.Media.Color]::FromArgb(0, 255, 255, 255) })
+  [void]$cv.Children.Add($spn)
+  $vb.Child = $cv
+  $star.Content = $vb
+  $star.Tag = $text
+  $star.Add_Click({ param($snd, $ev) $ev.Handled = $true; Clip-Pin ([string]$snd.Tag) })
+  [void]$w.Children.Add($card)
+  [void]$w.Children.Add($star)
+  return $w
+}
+function Clip-Restore {
+  try {
+    $c = $ui.clipFlash
+    $ui.clipFlash = $null
+    if ($c) {
+      $pinned = ($cfg.pins -ccontains [string]$c.Tag)
+      Anim-Color $c.Background $(if ($pinned) { $script:colCardPin } else { $script:colCardBase }) 320
+    }
+  } catch {}
+}
+function Build-Clip([bool]$animate = $true) {
+  $h = $E.clipHost
+  $h.Children.Clear()
+  $q = $E.clipQ.Text.Trim()
+  $hist = @()
+  if ($sync.Clip) { $hist = @($sync.Clip) }
+  $pins = @($cfg.pins)
+  $rows = New-Object System.Collections.ArrayList
+  foreach ($p in $pins) {
+    if (-not $p) { continue }
+    if ((-not $q) -or ([string]$p).IndexOf($q, [StringComparison]::OrdinalIgnoreCase) -ge 0) { [void]$rows.Add(@{ t = [string]$p; pin = $true }) }
+  }
+  foreach ($c in $hist) {
+    if (-not $c) { continue }
+    if ($pins -ccontains [string]$c) { continue }
+    if ((-not $q) -or ([string]$c).IndexOf($q, [StringComparison]::OrdinalIgnoreCase) -ge 0) { [void]$rows.Add(@{ t = [string]$c; pin = $false }) }
+  }
+  $i = 0
+  foreach ($r in $rows) {
+    if ($i -ge 60) { break }
+    $w = New-ClipRow $r.t $r.pin
+    [void]$h.Children.Add($w)
+    if ($animate) { Pop-In $w $i 7 }
+    $i++
+  }
+  if ($i -eq 0) {
+    $E.clipHintTxt.Text = $(if ($q) { 'Ничего не нашлось' } else { 'Пока пусто — скопируй что-нибудь' })
+    $E.clipHint.Visibility = 'Visible'
+  } else { $E.clipHint.Visibility = 'Collapsed' }
+}
+$E.clipQ.Add_TextChanged({ if ($ui.expanded -and $ui.tab -eq 'clip') { Build-Clip $false } })
+$E.btnClipClear.Add_Click({
+  $sync.ClipClear = $true
+  Later 200 { $ui.clipRef = $null; Build-Clip $true }
+})
+
+# ============================================================
+#  Shelf: files wait here; drag them in from anywhere, drag them out to any window
+# ============================================================
+$SHELF_MAX = 24
+$ui.shelfHot = $false; $ui.dragged = $false; $ui.dragStart = $null
+$script:imgExt = @('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp', '.tif', '.tiff')
+
+function Shelf-Icon([string]$path) {
+  # picture -> its own thumbnail, anything else -> the Windows icon
+  try {
+    $isDir = [IO.Directory]::Exists($path)
+    $ext = [IO.Path]::GetExtension($path).ToLower()
+    if ((-not $isDir) -and ($script:imgExt -contains $ext)) {
+      $bi = New-Object System.Windows.Media.Imaging.BitmapImage
+      $bi.BeginInit()
+      $bi.UriSource = New-Object System.Uri ($path)
+      $bi.DecodePixelWidth = 96
+      $bi.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
+      $bi.EndInit(); $bi.Freeze()
+      return @{ src = $bi; thumb = $true }
+    }
+    $ico = [System.Drawing.Icon]::ExtractAssociatedIcon($path)
+    if ($ico) {
+      $bs = [System.Windows.Interop.Imaging]::CreateBitmapSourceFromHIcon($ico.Handle, [System.Windows.Int32Rect]::Empty, [System.Windows.Media.Imaging.BitmapSizeOptions]::FromEmptyOptions())
+      $bs.Freeze()
+      $ico.Dispose()
+      return @{ src = $bs; thumb = $false }
+    }
+  } catch {}
+  return $null
+}
+function New-ShelfTile([string]$path) {
+  $wrap = New-Object System.Windows.Controls.Grid
+  $wrap.Width = 104.0; $wrap.Height = 96.0
+  $wrap.Margin = [System.Windows.Thickness]::new(0, 0, 8, 8)
+  $btn = New-Object System.Windows.Controls.Button
+  $btn.Style = $E.shelfHost.FindResource('SiteTile')
+  $btn.Tag = $path
+  $stack = New-Object System.Windows.Controls.StackPanel
+  $stack.HorizontalAlignment = 'Center'; $stack.VerticalAlignment = 'Center'
+  $holder = New-Object System.Windows.Controls.Border
+  $holder.Width = 44; $holder.Height = 44; $holder.CornerRadius = [System.Windows.CornerRadius]::new(11)
+  $holder.Background = New-Br '#1FFFFFFF'
+  $holder.ClipToBounds = $true
+  $ic = Shelf-Icon $path
+  if ($ic) {
+    $img = New-Object System.Windows.Controls.Image
+    $img.Source = $ic.src
+    [System.Windows.Media.RenderOptions]::SetBitmapScalingMode($img, [System.Windows.Media.BitmapScalingMode]::HighQuality)
+    if ($ic.thumb) { $img.Stretch = 'UniformToFill' } else { $img.Width = 30; $img.Height = 30; $img.Stretch = 'Uniform' }
+    $img.HorizontalAlignment = 'Center'; $img.VerticalAlignment = 'Center'
+    $holder.Child = $img
+  } else {
+    $lt = New-Tb $(if ([IO.Directory]::Exists($path)) { '📁' } else { '▭' }) 22 $script:brWhite
+    $lt.HorizontalAlignment = 'Center'; $lt.VerticalAlignment = 'Center'
+    $holder.Child = $lt
+  }
+  $nmText = [IO.Path]::GetFileName($path.TrimEnd('\'))
+  if (-not $nmText) { $nmText = $path }
+  $nm = New-Tb $nmText 11 (New-Br '#E6FFFFFF') 'SemiBold'
+  $nm.MaxWidth = 92; $nm.TextTrimming = 'CharacterEllipsis'; $nm.HorizontalAlignment = 'Center'
+  $nm.Margin = [System.Windows.Thickness]::new(0, 7, 0, 0)
+  $nm.ToolTip = $path
+  [void]$stack.Children.Add($holder); [void]$stack.Children.Add($nm)
+  $btn.Content = $stack
+  $btn.Add_PreviewMouseLeftButtonDown({ param($snd, $ev) $ui.dragged = $false; $ui.dragStart = $ev.GetPosition($null) })
+  $btn.Add_PreviewMouseMove({
+    param($snd, $ev)
+    if ($ev.LeftButton -ne [System.Windows.Input.MouseButtonState]::Pressed -or $null -eq $ui.dragStart) { return }
+    $p = $ev.GetPosition($null)
+    if ([Math]::Abs($p.X - $ui.dragStart.X) -lt 8 -and [Math]::Abs($p.Y - $ui.dragStart.Y) -lt 8) { return }
+    $ui.dragStart = $null; $ui.dragged = $true
+    Shelf-DragOut $snd
+  })
+  $btn.Add_Click({
+    param($snd, $ev)
+    if ($ui.dragged) { $ui.dragged = $false; return }
+    Shelf-Open ([string]$snd.Tag)
+  })
+  [void]$wrap.Children.Add($btn)
+  $x = New-XButton 20.0
+  $x.HorizontalAlignment = 'Right'; $x.VerticalAlignment = 'Top'
+  $x.Margin = [System.Windows.Thickness]::new(0, 4, 4, 0)
+  $x.Tag = $path
+  $x.Add_Click({ param($snd, $ev) $ev.Handled = $true; Shelf-Remove ([string]$snd.Tag) $snd.Parent })
+  [void]$wrap.Children.Add($x)
+  $wrap.Add_MouseEnter({ param($snd, $ev) FadeTo $snd.Children[1] 1.0 140 })
+  $wrap.Add_MouseLeave({ param($snd, $ev) FadeTo $snd.Children[1] 0.0 200 })
+  $wrap.RenderTransformOrigin = [System.Windows.Point]::new(0.5, 0.5)
+  return $wrap
+}
+function Shelf-Existing {
+  $out = @()
+  foreach ($p in @($cfg.shelf)) {
+    if ($p -and ([IO.File]::Exists([string]$p) -or [IO.Directory]::Exists([string]$p))) { $out += [string]$p }
+  }
+  return $out
+}
+function Build-Shelf([bool]$animate = $true, [string]$onlyPath = '') {
+  $list = @(Shelf-Existing)
+  if ($list.Count -ne @($cfg.shelf).Count) { $cfg.shelf = $list; Request-Save }
+  $h = $E.shelfHost
+  $h.Children.Clear()
+  $i = 0
+  foreach ($p in $list) {
+    $t = New-ShelfTile $p
+    [void]$h.Children.Add($t)
+    if ($animate -and (($onlyPath -eq '') -or ($p -eq $onlyPath))) { Pop-In $t $i 8 }
+    $i++
+  }
+  $E.shelfHint.Visibility = $(if ($i -eq 0) { 'Visible' } else { 'Collapsed' })
+  $E.btnShelfClear.Visibility = $(if ($i -eq 0) { 'Collapsed' } else { 'Visible' })
+  $E.shelfLabel.Text = $(if ($i -eq 0) { 'ПОЛКА ДЛЯ ФАЙЛОВ · ПЕРЕТАЩИ СЮДА' } else { "ПОЛКА · $i · КЛИК — ОТКРЫТЬ · ТАЩИ В ЛЮБОЕ ОКНО" })
+}
+function Shelf-Open([string]$path) {
+  try { [void][System.Diagnostics.Process]::Start($path) }
+  catch { Log "shelf open: $($_.Exception.Message)"; return }
+  Collapse
+}
+function Shelf-Remove([string]$path, $tile) {
+  $cfg.shelf = @($cfg.shelf | Where-Object { $_ -ne $path })
+  Request-Save
+  if ($tile) { Pop-Out $tile 170 }
+  Later 190 { if ($ui.expanded -and $ui.tab -eq 'shelf') { Build-Shelf $false } }
+}
+function Shelf-DragOut($btn) {
+  try {
+    $path = [string]$btn.Tag
+    $files = New-Object System.Collections.Specialized.StringCollection
+    [void]$files.Add($path)
+    $data = New-Object System.Windows.DataObject
+    $data.SetFileDropList($files)
+    $eff = [System.Windows.DragDrop]::DoDragDrop($btn, $data, [System.Windows.DragDropEffects]::Copy -bor [System.Windows.DragDropEffects]::Link)
+    if ($eff -ne [System.Windows.DragDropEffects]::None) { Later 150 { Collapse } }
+  } catch { Log "drag out: $($_.Exception.Message)" }
+}
+# add files that were dropped (from the Explorer, the desktop, ...)
+function Shelf-Add([string[]]$paths) {
+  $added = @()
+  $cur = @($cfg.shelf)
+  foreach ($p in $paths) {
+    if (-not $p) { continue }
+    if (-not ([IO.File]::Exists($p) -or [IO.Directory]::Exists($p))) { continue }
+    if ($cur -contains $p) { $cur = @(@($p) + @($cur | Where-Object { $_ -ne $p })); continue }
+    $cur = @(@($p) + $cur)
+    $added += $p
+  }
+  $cfg.shelf = @($cur | Select-Object -First $SHELF_MAX)
+  Request-Save
+  return $added
+}
+function Shelf-Dropped($data) {
+  $paths = @()
+  try {
+    if ($data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) { $paths = @($data.GetData([System.Windows.DataFormats]::FileDrop)) }
+  } catch {}
+  if ($paths.Count -eq 0) { return }
+  $added = @(Shelf-Add $paths)
+  if ($ui.expanded -and (-not $ui.closing)) {
+    if ($ui.tab -ne 'shelf' -and $E.tabBar.Visibility -eq 'Visible') { Set-Tab 'shelf' }
+    else { Build-Shelf $true $(if ($added.Count -gt 0) { [string]$added[0] } else { '' }) }
+  } else {
+    $n = $paths.Count
+    $E.cDoneTxt.Text = $(if ($n -eq 1) { 'На полке: ' + [IO.Path]::GetFileName(([string]$paths[0]).TrimEnd('\')) } else { "На полке: $n файла" })
+    if ($E.cDoneTxt.Text.Length -gt 26) { $E.cDoneTxt.Text = $E.cDoneTxt.Text.Substring(0, 25) + '…' }
+    $ui.doneUntil = (Now-Ms) + 2200
+    Update-Mode
+  }
+}
+function Shelf-Glow([bool]$on) {
+  if ($ui.shelfHot -eq $on) { return }
+  $ui.shelfHot = $on
+  Anim-Color $script:shelfDashBr $(if ($on) { [System.Windows.Media.Color]::FromArgb(0xE0, 255, 255, 255) } else { [System.Windows.Media.Color]::FromArgb(0x44, 255, 255, 255) }) 180
+  Anim-Color $script:shelfFillBr $(if ($on) { [System.Windows.Media.Color]::FromArgb(0x2A, 255, 255, 255) } else { [System.Windows.Media.Color]::FromArgb(0x0F, 255, 255, 255) }) 200
+  $st = $E.shelfZone.RenderTransform
+  Anim-To $st ([System.Windows.Media.ScaleTransform]::ScaleXProperty) $(if ($on) { 1.012 } else { 1.0 }) 260 $script:easeBack
+  Anim-To $st ([System.Windows.Media.ScaleTransform]::ScaleYProperty) $(if ($on) { 1.012 } else { 1.0 }) 260 $script:easeBack
+}
+$script:shelfDashBr = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromArgb(0x44, 255, 255, 255))
+$script:shelfFillBr = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromArgb(0x0F, 255, 255, 255))
+$E.shelfDash.Stroke = $script:shelfDashBr
+$E.shelfFill.Fill = $script:shelfFillBr
+$E.Island.AllowDrop = $true
+$E.shelfZone.AllowDrop = $true
+$E.Island.Add_DragEnter({
+  param($snd, $ev)
+  if ($ev.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) {
+    $ev.Effects = [System.Windows.DragDropEffects]::Copy
+    if (-not $ui.expanded) { $ui.hover = $true; Retarget 0.30 0.80 }
+  } else { $ev.Effects = [System.Windows.DragDropEffects]::None }
+  $ev.Handled = $true
+})
+$E.Island.Add_DragOver({
+  param($snd, $ev)
+  if ($ev.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) { $ev.Effects = [System.Windows.DragDropEffects]::Copy }
+  else { $ev.Effects = [System.Windows.DragDropEffects]::None }
+  $ev.Handled = $true
+})
+$E.Island.Add_DragLeave({
+  param($snd, $ev)
+  if (-not $ui.expanded) { $ui.hover = $false; Retarget 0.34 0.86 }
+  Shelf-Glow $false
+})
+$E.Island.Add_Drop({
+  param($snd, $ev)
+  Shelf-Glow $false
+  if (-not $ui.expanded) { $ui.hover = $false }
+  try { Shelf-Dropped $ev.Data } catch { Log "drop: $($_.Exception.Message)" }
+  $ev.Handled = $true
+})
+$E.shelfZone.Add_DragEnter({ param($snd, $ev) if ($ev.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) { Shelf-Glow $true } })
+$E.shelfZone.Add_DragLeave({ param($snd, $ev) Shelf-Glow $false })
+$E.btnShelfClear.Add_Click({
+  $cfg.shelf = @()
+  Request-Save
+  foreach ($t in @($E.shelfHost.Children)) { Pop-Out $t 170 }
+  Later 200 { Build-Shelf $false }
+})
+
+# ---- screenshot / area / screen recording ----
+function Shot-Done([string]$msg, [string]$file) {
+  if ($file) { try { [void](Shelf-Add @($file)) } catch {} }
+  $E.cDoneTxt.Text = $msg
+  $ui.doneUntil = (Now-Ms) + 2400
+  try { [System.Media.SystemSounds]::Asterisk.Play() } catch {}
+  Update-Mode
+}
+function Take-Screenshot {
+  if ($ui.expanded) { Collapse }
+  # the island must be gone from the picture: hide the window for a blink
+  Later 520 {
+    $file = ''
+    try {
+      $dir = Join-Path ([Environment]::GetFolderPath('MyPictures')) 'Screenshots'
+      if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+      $file = Join-Path $dir ('Island_' + (Get-Date).ToString('yyyyMMdd_HHmmss') + '.png')
+      [DI.Native]::Visible($mainHwnd, $false)
+      Start-Sleep -Milliseconds 140
+      $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+      $bmp = New-Object System.Drawing.Bitmap ($b.Width, $b.Height)
+      $gr = [System.Drawing.Graphics]::FromImage($bmp)
+      $gr.CopyFromScreen($b.X, $b.Y, 0, 0, $bmp.Size)
+      $gr.Dispose()
+      [DI.Native]::Visible($mainHwnd, (-not $ui.hidden))
+      $bmp.Save($file, [System.Drawing.Imaging.ImageFormat]::Png)
+      try { [System.Windows.Forms.Clipboard]::SetImage($bmp) } catch {}
+      $bmp.Dispose()
+      Shot-Done 'Скриншот сохранён' $file
+    } catch {
+      try { [DI.Native]::Visible($mainHwnd, (-not $ui.hidden)) } catch {}
+      Log "screenshot: $($_.Exception.Message)"
+      Shot-Done 'Не получилось' ''
+    }
+  }
+}
+$E.btnShot.Add_Click({ Take-Screenshot })
+$E.btnSnip.Add_Click({
+  Collapse
+  # Win + Shift + S : the system "snip" overlay
+  Later 650 { try { [DI.Native]::Chord([byte[]](0x5B, 0x10, 0x53)) } catch { Log "snip: $($_.Exception.Message)" } }
+})
+$E.btnRec.Add_Click({
+  Collapse
+  # Win + Alt + R : Xbox Game Bar starts / stops recording (Game Bar must be on in Windows settings)
+  Later 550 { try { [DI.Native]::Chord([byte[]](0x5B, 0x12, 0x52)) } catch { Log "record: $($_.Exception.Message)" } }
+})
+
+# ============================================================
+#  View: glass themes
+# ============================================================
+function Theme-Chip([string]$key, $th, [bool]$sel) {
+  $b = New-Object System.Windows.Controls.Button
+  $b.Style = $E.themeHost.FindResource('PillBtn')
+  $b.Margin = [System.Windows.Thickness]::new(0, 0, 8, 8)
+  $b.Padding = [System.Windows.Thickness]::new(12, 7, 14, 7)
+  $b.Tag = $key
+  $spn = New-Object System.Windows.Controls.StackPanel
+  $spn.Orientation = 'Horizontal'
+  $dot = New-Object System.Windows.Shapes.Ellipse
+  $dot.Width = 12; $dot.Height = 12; $dot.Margin = [System.Windows.Thickness]::new(0, 0, 8, 0)
+  if ($th[1]) {
+    $dot.Fill = New-Br ('#FF{0:X2}{1:X2}{2:X2}' -f [int]$th[1][0], [int]$th[1][1], [int]$th[1][2])
+  } else {
+    $lg = New-Object System.Windows.Media.LinearGradientBrush
+    $lg.StartPoint = [System.Windows.Point]::new(0, 0); $lg.EndPoint = [System.Windows.Point]::new(1, 1)
+    foreach ($pair in @(@('#FF7CC4FF', 0.0), @('#FFBF5AF2', 0.5), @('#FFFF9F0A', 1.0))) {
+      $gs = New-Object System.Windows.Media.GradientStop ([System.Windows.Media.ColorConverter]::ConvertFromString($pair[0]), [double]$pair[1])
+      $lg.GradientStops.Add($gs)
+    }
+    $dot.Fill = $lg
+  }
+  $lb = New-Object System.Windows.Controls.TextBlock
+  $lb.Text = [string]$th[0]; $lb.VerticalAlignment = 'Center'
+  [void]$spn.Children.Add($dot); [void]$spn.Children.Add($lb)
+  $b.Content = $spn
+  $b.Background = New-Object System.Windows.Media.SolidColorBrush $(if ($sel) { [System.Windows.Media.Color]::FromRgb(242, 242, 242) } else { [System.Windows.Media.Color]::FromArgb(0x22, 255, 255, 255) })
+  $b.Foreground = New-Object System.Windows.Media.SolidColorBrush $(if ($sel) { [System.Windows.Media.Color]::FromRgb(16, 16, 20) } else { [System.Windows.Media.Color]::FromRgb(255, 255, 255) })
+  $b.Add_Click({
+    param($snd, $ev)
+    $cfg.theme = [string]$snd.Tag
+    Request-Save
+    Sync-Themes
+    Set-PillTint 340 $false
+    Set-Wash
+  })
+  return $b
+}
+function Sel-Look($b, [bool]$on) {
+  Anim-Color $b.Background $(if ($on) { [System.Windows.Media.Color]::FromRgb(242, 242, 242) } else { [System.Windows.Media.Color]::FromArgb(0x22, 255, 255, 255) }) 260
+  Anim-Color $b.Foreground $(if ($on) { [System.Windows.Media.Color]::FromRgb(16, 16, 20) } else { [System.Windows.Media.Color]::FromRgb(255, 255, 255) }) 260
+}
+function Sync-Themes {
+  $h = $E.themeHost
+  $cur = [string]$cfg.theme
+  if (-not $THEMES.Contains($cur)) { $cur = 'auto' }
+  if ($h.Children.Count -eq 0) {
+    $i = 0
+    foreach ($k in $THEMES.Keys) {
+      $c = Theme-Chip $k $THEMES[$k] ($k -eq $cur)
+      [void]$h.Children.Add($c)
+      Pop-In $c $i 6
+      $i++
+    }
+    return
+  }
+  foreach ($c in $h.Children) { Sel-Look $c ([string]$c.Tag -eq $cur) }
+}
+
+# ============================================================
+#  More: global hotkey (polled, so it works while any app has the focus) + pomodoro dots
+# ============================================================
+$HOTKEYS = @('Ctrl+Alt+I', 'Ctrl+Alt+Space', 'Ctrl+Shift+Space', 'Ctrl+Alt+D', 'Off')
+$script:hkVk = @()
+$script:hkMods = @{ ctrl = $false; alt = $false; shift = $false; win = $false }
+$script:hkWas = $false
+function Set-Hotkey([string]$spec) {
+  $cfg.hotkey = $spec
+  $script:hkVk = @()
+  $script:hkMods = @{ ctrl = $false; alt = $false; shift = $false; win = $false }
+  if ((-not $spec) -or $spec -eq 'Off') { return }
+  foreach ($part in ($spec -split '\+')) {
+    switch ($part.ToLower()) {
+      'ctrl' { $script:hkVk += 0x11; $script:hkMods.ctrl = $true }
+      'alt' { $script:hkVk += 0x12; $script:hkMods.alt = $true }
+      'shift' { $script:hkVk += 0x10; $script:hkMods.shift = $true }
+      'win' { $script:hkVk += 0x5B; $script:hkMods.win = $true }
+      'space' { $script:hkVk += 0x20 }
+      default { if ($part.Length -eq 1) { $script:hkVk += [int][char]($part.ToUpper()) } }
+    }
+  }
+}
+function Hk-Tick {
+  if ($script:hkVk.Count -eq 0) { return }
+  $all = $true
+  foreach ($vk in $script:hkVk) { if (-not [DI.Native]::KeyDown([int]$vk)) { $all = $false; break } }
+  if ($all) {
+    # no extra modifiers (Ctrl+Alt+Shift+I is something else)
+    if ((-not $script:hkMods.ctrl) -and [DI.Native]::KeyDown(0x11)) { $all = $false }
+    if ((-not $script:hkMods.alt) -and [DI.Native]::KeyDown(0x12)) { $all = $false }
+    if ((-not $script:hkMods.shift) -and [DI.Native]::KeyDown(0x10)) { $all = $false }
+    if ((-not $script:hkMods.win) -and ([DI.Native]::KeyDown(0x5B) -or [DI.Native]::KeyDown(0x5C))) { $all = $false }
+  }
+  if ($all -and (-not $script:hkWas)) {
+    if ($ui.expanded) { Collapse } else { Expand }
+  }
+  $script:hkWas = $all
+}
+$hkTimer = New-Object System.Windows.Threading.DispatcherTimer
+$hkTimer.Interval = [TimeSpan]::FromMilliseconds(60)
+$hkTimer.Add_Tick({ try { Hk-Tick } catch {} })
+Set-Hotkey ([string]$cfg.hotkey)
+$hkTimer.Start()
+function Sync-Hotkeys {
+  $h = $E.hkHost
+  $cur = [string]$cfg.hotkey
+  if (-not $cur) { $cur = 'Off' }
+  if ($h.Children.Count -eq 0) {
+    foreach ($k in $HOTKEYS) {
+      $b = New-Object System.Windows.Controls.Button
+      $b.Style = $h.FindResource('PillBtn')
+      $b.Margin = [System.Windows.Thickness]::new(0, 0, 6, 6)
+      $b.Padding = [System.Windows.Thickness]::new(11, 5, 11, 5)
+      $b.Content = $(if ($k -eq 'Off') { 'Выкл' } else { $k.Replace('Space', 'Пробел') })
+      $b.Tag = $k
+      $b.Background = New-Object System.Windows.Media.SolidColorBrush $(if ($k -eq $cur) { [System.Windows.Media.Color]::FromRgb(242, 242, 242) } else { [System.Windows.Media.Color]::FromArgb(0x22, 255, 255, 255) })
+      $b.Foreground = New-Object System.Windows.Media.SolidColorBrush $(if ($k -eq $cur) { [System.Windows.Media.Color]::FromRgb(16, 16, 20) } else { [System.Windows.Media.Color]::FromRgb(255, 255, 255) })
+      $b.Add_Click({
+        param($snd, $ev)
+        Set-Hotkey ([string]$snd.Tag)
+        Request-Save
+        Sync-Hotkeys
+      })
+      [void]$h.Children.Add($b)
+    }
+    return
+  }
+  foreach ($c in $h.Children) { Sel-Look $c ([string]$c.Tag -eq $cur) }
+}
+
+# pomodoro dots: filled = finished focus rounds in the current set of four
+$script:pomoBr = @{}
+foreach ($n in 1..4) {
+  $br = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromArgb(0x33, 255, 255, 255))
+  $E["pm$n"].Fill = $br
+  $script:pomoBr[$n] = $br
+}
+function Sync-Pomo {
+  $rounds = [int]$ui.pomoRound
+  $filled = $rounds % 4
+  if ($rounds -gt 0 -and $filled -eq 0) { $filled = 4 }
+  foreach ($n in 1..4) {
+    $on = ($n -le $filled)
+    Anim-Color $script:pomoBr[$n] $(if ($on) { [System.Windows.Media.Color]::FromRgb(255, 159, 10) } else { [System.Windows.Media.Color]::FromArgb(0x33, 255, 255, 255) }) 300
+  }
+  if ($rounds -gt 0) { $E.pomoInfo.Text = "Закончено кругов фокуса: $rounds. Следующий круг — 25 минут, потом отдых 5." }
+  else { $E.pomoInfo.Text = '25 мин работы, 5 мин отдыха. После четырёх кругов — длинный перерыв 15 мин.' }
+  $E.btnPomo.Content = $(if ($rounds -gt 0) { 'Новый цикл' } else { 'Начать фокус' })
+}
+
+} catch { Log ("init c4d failed: " + $_.Exception.Message + " @ line " + $_.InvocationInfo.ScriptLineNumber) }
 
 # ============================================================
 #  Poll (250 ms): worker state -> UI
 # ============================================================
-function Update-ClipUi {
-  $clip = $sync.Clip
-  $n = 0
-  if ($clip) { $n = [Math]::Min(@($clip).Count, 6) }
-  for ($i = 1; $i -le 6; $i++) {
-    $b = $E["cb$i"]
-    if ($i -le $n) {
-      $b.Visibility = 'Visible'
-      $b.Content = (([string]$clip[$i - 1]) -replace '\s+', ' ').Trim()
-    } else { $b.Visibility = 'Collapsed' }
-  }
-  $E.clipHint.Visibility = if ($n -eq 0) { 'Visible' } else { 'Collapsed' }
-}
-
 function Update-Battery($st) {
   if (-not $st.hasBatt) { return }
   $now = Now-Ms
@@ -1706,15 +3700,20 @@ function Update-Volume {
     $nvis = if ($mu) { 'Collapsed' } else { 'Visible' }
     $E.cVolMute.Visibility = $vis; $E.cVolWave.Visibility = $nvis
     $E.muteX.Visibility = $vis; $E.muteWave.Visibility = $nvis
+    $E.mute2X.Visibility = $vis; $E.mute2Wave.Visibility = $nvis
     if ((-not $first) -and (-not $ui.expanded)) { $ui.volUntil = (Now-Ms) + 1700 }
   }
   $ui.lastVol = $v; $ui.lastMute = $mu
-  # keep the slider in step with the system volume (keys, other apps); a drag in progress is never overwritten
-  if ($ui.expanded -and $ui.tab -eq 'music' -and (-not $SL.vol.drag)) {
-    if (([Math]::Abs($SL.vol.frac - $v) -gt 0.004) -or (-not $ui.volSynced)) {
-      Slider-Set 'vol' $v ([bool]$ui.volSynced)
-      $E.volPct.Text = "$([int][Math]::Round($v * 100.0))%"
-      $ui.volSynced = $true
+  # keep the slider of the open tab in step with the system volume (keys, other apps); a drag in progress is never overwritten
+  if ($ui.expanded -and (-not $ui.closing)) {
+    $sid = $null; $pt = $null
+    if ($ui.tab -eq 'music') { $sid = 'vol'; $pt = $E.volPct } elseif ($ui.tab -eq 'sound') { $sid = 'mvol'; $pt = $E.mvolPct }
+    if ($sid -and (-not $SL[$sid].drag)) {
+      if (([Math]::Abs($SL[$sid].frac - $v) -gt 0.004) -or (-not $ui.vs[$sid])) {
+        Slider-Set $sid $v ([bool]$ui.vs[$sid])
+        $pt.Text = "$([int][Math]::Round($v * 100.0))%"
+        $ui.vs[$sid] = $true
+      }
     }
   }
 }
@@ -1877,15 +3876,28 @@ function Poll-Tick {
     Set-Wash
   }
 
-  if ($ui.expanded) {
-    if (-not [object]::ReferenceEquals($sync.Clip, $ui.clipRef)) { $ui.clipRef = $sync.Clip; Update-ClipUi }
-    if ($ui.tab -eq 'weather') { Update-WeatherUi }
-    if ($ui.tab -eq 'sys') { Update-SysUi }
+  if ($ui.expanded -and (-not $ui.closing)) {
+    try {
+      switch ($ui.tab) {
+        'music'   { Lyr-Sync; Lyr-Poll; Lyr-Tick }
+        'weather' { Update-WeatherUi }
+        'sys'     { Update-SysUi }
+        'sound'   { Mixer-Poll }
+        'todo'    { Events-Tick }
+        'clip'    {
+          if (-not [object]::ReferenceEquals($sync.Clip, $ui.clipRef)) { $ui.clipRef = $sync.Clip; Build-Clip $false }
+        }
+      }
+    } catch {
+      $ui.tabErr++
+      if ($ui.tabErr -lt 8) { Log ("tab-tick " + $ui.tab + ": " + $_.Exception.Message + " @ " + $_.InvocationInfo.ScriptLineNumber) }
+    }
   }
+  try { Ics-Tick } catch { $ui.tabErr++; if ($ui.tabErr -lt 8) { Log ("ics: " + $_.Exception.Message) } }
   if ($ui.hover -and $ui.mode -eq 'idle') { $E.cIdleTxt.Text = (Get-Date).ToString('HH:mm') }
 }
 
-$ui.pollErr = 0
+$ui.pollErr = 0; $ui.tabErr = 0
 $poll = New-Object System.Windows.Threading.DispatcherTimer
 $poll.Interval = [TimeSpan]::FromMilliseconds(120)
 $poll.Add_Tick({
@@ -1908,7 +3920,7 @@ $ui.sizeKey = 'idle'; $ui.mode = 'idle'
 Set-Compact 'idle'
 Retarget 0.62 0.72      # soft pop when the island appears
 $timerDt.Start(); $poll.Start(); $keep.Start()
-Log "running v2.3: scale=$($ui.scale) win=($($ui.winX),$($ui.winY)) glassOn=$($ui.glassOn)"
+Log "running v2.4: scale=$($ui.scale) win=($($ui.winX),$($ui.winY)) glassOn=$($ui.glassOn)"
 [void]$app.Run()
 
 try { $sync.Running = $false } catch {}
