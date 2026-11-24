@@ -1,5 +1,5 @@
 ﻿# ============================================================
-#  Dynamic Island for Windows  v2.4   (PowerShell 5.1 + WPF, no dependencies)
+#  Dynamic Island for Windows  v2.5   (PowerShell 5.1 + WPF, no dependencies)
 #  Liquid Glass pill: blurred snapshot of the screen behind it, clipped to the
 #  pill shape, spring morphing, music + lyrics / to-do + calendar / weather /
 #  system load / sound mixer / clipboard / sites / file shelf / timer + pomodoro.
@@ -26,7 +26,7 @@ trap {
   if ($Console) { Write-Host "Нажми Enter, чтобы закрыть..."; [void](Read-Host) }
   exit 1
 }
-Log "=== start v2.4  PS $($PSVersionTable.PSVersion)  dir=$ScriptDir"
+Log "=== start v2.5  PS $($PSVersionTable.PSVersion)  dir=$ScriptDir"
 
 # ---- single instance ----
 $script:mutex = New-Object System.Threading.Mutex($false, 'Global\DynamicIslandPS_v2')
@@ -53,6 +53,7 @@ $cfg = @{
   accent = '242,242,242'; eq = $true; charge = $true; glass = $true; glassAlpha = 55
   hideFull = $true; hoverClock = $true; city = ''; favicons = $true
   theme = 'auto'; hotkey = 'Ctrl+Alt+I'; icsUrl = ''
+  pillMusic = 'title'; pillIdle = 'hover'; shotDir = ''
   cities = @(); cityIdx = -1; pins = @(); shelf = @(); todos = @(); events = @()
   sites = @(
     @{ n = 'YouTube'; u = 'https://www.youtube.com' }
@@ -104,6 +105,11 @@ function Load-Settings {
   $cfg.theme = [string]$cfg.theme
   $cfg.hotkey = [string]$cfg.hotkey
   $cfg.icsUrl = [string]$cfg.icsUrl
+  $cfg.pillMusic = [string]$cfg.pillMusic
+  if (@('title', 'artist', 'both') -notcontains $cfg.pillMusic) { $cfg.pillMusic = 'title' }
+  $cfg.pillIdle = [string]$cfg.pillIdle
+  if (@('hover', 'clock', 'date') -notcontains $cfg.pillIdle) { $cfg.pillIdle = 'hover' }
+  $cfg.shotDir = [string]$cfg.shotDir
 }
 function Save-Settings {
   try { ($cfg | ConvertTo-Json -Depth 6) | Set-Content -Path $SetFile -Encoding UTF8 }
@@ -138,17 +144,24 @@ $workerPs.Runspace = $rs
 $null = $workerPs.AddScript($workerText)
 $null = $workerPs.BeginInvoke()
 
-# internet worker: weather, city search, lyrics, calendar. Slow requests must never block the media session.
-try {
-  $netText = [IO.File]::ReadAllText((Join-Path $ScriptDir 'src\Net.ps1'), [Text.Encoding]::UTF8)
-  $netRs = [runspacefactory]::CreateRunspace()
-  $netRs.Open()
-  $netRs.SessionStateProxy.SetVariable('sync', $sync)
-  $netPs = [powershell]::Create()
-  $netPs.Runspace = $netRs
-  $null = $netPs.AddScript($netText)
-  $null = $netPs.BeginInvoke()
-} catch { Log "net runspace failed: $($_.Exception.Message)" }
+# internet workers: lyrics / weather + calendar / city search, each in its own runspace
+# (a slow weather request must never delay lyrics or the city search, and none of them may block the media session)
+$netText = ''
+try { $netText = [IO.File]::ReadAllText((Join-Path $ScriptDir 'src\Net.ps1'), [Text.Encoding]::UTF8) } catch { Log "net script: $($_.Exception.Message)" }
+$script:netPool = @()
+foreach ($netRole in @('lyr', 'wx', 'city')) {
+  try {
+    $nrs = [runspacefactory]::CreateRunspace()
+    $nrs.Open()
+    $nrs.SessionStateProxy.SetVariable('sync', $sync)
+    $nrs.SessionStateProxy.SetVariable('role', $netRole)
+    $nps = [powershell]::Create()
+    $nps.Runspace = $nrs
+    $null = $nps.AddScript($netText)
+    $null = $nps.BeginInvoke()
+    $script:netPool += , $nps
+  } catch { Log "net runspace ($netRole) failed: $($_.Exception.Message)" }
+}
 
 # system load sampler (CPU / RAM / GPU): its own runspace, only works while the "Система" tab is open
 $sysText = [IO.File]::ReadAllText((Join-Path $ScriptDir 'src\Sys.ps1'), [Text.Encoding]::UTF8)
@@ -243,6 +256,7 @@ $ui = @{
   kbd = $false; prevFg = [IntPtr]::Zero; sitesEdit = $false; sysRef = $null; volErrLogged = $false
   lastLeft = $false; wxRef = $null; renderErr = 0
   evtUntil = 0.0; evtText = ''; pomo = $false; pomoPhase = 'work'; pomoRound = 0
+  pillSig = ''; idleShown = $false; zeroHits = 0; posTitle = ''
 }
 try { $ui.reduceMotion = -not [System.Windows.SystemParameters]::ClientAreaAnimation } catch {}
 try {
@@ -883,14 +897,14 @@ function Set-Tab([string]$tab, [bool]$animate = $true) {
   Show-Section $tab $animate
   Update-SysOn
   try {
-    if ($tab -eq 'music') { $ui.vs.vol = $false; Lyr-Sync }
+    if ($tab -eq 'music') { $ui.vs.vol = $false; Lyr-Sync; Music-Resume }
     elseif ($tab -eq 'todo') { Build-Events; Build-Todos $animate }
     elseif ($tab -eq 'weather') { Wx-Show }
     elseif ($tab -eq 'sound') { $ui.vs.mvol = $false; $ui.mixAt = 0.0; Mixer-Poll }
     elseif ($tab -eq 'clip') { $ui.clipRef = $null; Build-Clip $animate }
     elseif ($tab -eq 'sites') { Build-Sites }
     elseif ($tab -eq 'shelf') { Build-Shelf $animate }
-    elseif ($tab -eq 'view') { Sync-Themes }
+    elseif ($tab -eq 'view') { Sync-Themes; Sync-PillOpts }
     elseif ($tab -eq 'more') { Sync-Hotkeys; Sync-Pomo }
   } catch { Log "tab $tab : $($_.Exception.Message)" }
 }
@@ -916,6 +930,7 @@ function Expand {
   }
   $E.ExpandedLayer.Visibility = 'Visible'
   try { $E.ExpandedLayer.UpdateLayout(); if ($ui.timerLeft -le 0) { Set-TabInd $ui.tab $false } } catch { Log "layout: $($_.Exception.Message)" }
+  if ($ui.timerLeft -le 0 -and $ui.tab -eq 'music') { try { Music-Resume } catch { } }
   Update-SysOn
   $sb = New-Object System.Windows.Media.Animation.Storyboard
   $ao = New-Object System.Windows.Media.Animation.DoubleAnimation
@@ -1290,14 +1305,14 @@ $E.Island.Add_MouseEnter({
   if ($ui.expanded) { return }
   $ui.hover = $true
   Retarget 0.30 0.80
-  if ($ui.mode -eq 'idle' -and $cfg.hoverClock) {
+  if ($ui.mode -eq 'idle' -and $cfg.hoverClock -and ([string]$cfg.pillIdle -eq 'hover')) {
     $E.cIdleTxt.Text = (Get-Date).ToString('HH:mm')
     FadeTo $E.cIdleTxt 1.0 220
   }
 })
 $E.Island.Add_MouseLeave({
   $ui.hover = $false; $ui.pressed = $false
-  FadeTo $E.cIdleTxt 0.0 150
+  if ([string]$cfg.pillIdle -eq 'hover') { FadeTo $E.cIdleTxt 0.0 150 }
   if (-not $ui.expanded) { Retarget 0.34 0.86 }
 })
 $E.Island.Add_MouseLeftButtonDown({ if (-not $ui.expanded) { $ui.pressed = $true; Retarget 0.20 0.85 } })
@@ -1886,6 +1901,8 @@ function Wait-Spin($el) { }
 $ui.lyr = @{ n = 0; synced = $false; times = $null; lines = @(); tops = @(); hs = @(); idx = -2; userUntil = 0.0; viewH = 380.0; textH = 0.0 }
 $ui.lyrReq = ''
 $ui.lyrRef = $null
+$ui.lyrSeq = 0; $ui.lyrPend = ''; $ui.lyrPendAt = 0.0; $ui.lyrGapAt = 0.0; $ui.lyrErrAt = 0.0
+$ui.lyrCache = @{}
 $script:lyrT = $E.lyrHost.RenderTransform
 
 function Lyr-Show([string]$msg) {
@@ -1898,20 +1915,52 @@ function Lyr-Clear {
   $L = $ui.lyr
   $L.lines = @(); $L.tops = @(); $L.hs = @(); $L.n = 0; $L.idx = -2; $L.synced = $false; $L.times = $null; $L.userUntil = 0.0
 }
+# show a finished lookup (fresh from the worker or from the cache)
+function Lyr-Apply($res) {
+  if ($res.state -eq 'ok') { Lyr-Build $res }
+  elseif ($res.state -eq 'err') { $ui.lyrErrAt = Now-Ms; Lyr-Show 'Не удалось загрузить текст. Проверь интернет' }
+  else { Lyr-Show 'Для этой песни текста не нашлось' }
+}
 # ask for the lyrics of the track that is playing now (only while the Music tab is open)
 function Lyr-Sync {
   if (-not ($ui.expanded -and (-not $ui.closing) -and $ui.tab -eq 'music')) { return }
+  $now = Now-Ms
   $st = $sync.State
   if ((-not $st) -or $st.mode -ne 'music' -or (-not $st.title)) {
-    if ($ui.lyrReq -ne '#none') { $ui.lyrReq = '#none'; Lyr-Clear; Lyr-Show 'Включи песню — текст появится здесь' }
+    # a short gap (the player flaps between tracks) keeps the text on screen
+    if ($ui.lyrGapAt -le 0.0) { $ui.lyrGapAt = $now }
+    if ((($now - $ui.lyrGapAt) -gt 3000.0) -and $ui.lyrReq -ne '#none') { $ui.lyrReq = '#none'; Lyr-Clear; Lyr-Show 'Включи песню — текст появится здесь' }
     return
   }
+  $ui.lyrGapAt = 0.0
   $key = (([string]$st.artist) + '|' + ([string]$st.title)).ToLower()
-  if ($key -eq $ui.lyrReq) { return }
+  if ($key -eq $ui.lyrReq) {
+    # a failed lookup is tried again after a while
+    if ($ui.lyrErrAt -gt 0.0 -and (($now - $ui.lyrErrAt) -gt 15000.0)) { $ui.lyrErrAt = 0.0 } else { return }
+  } else {
+    # a new track: wait a moment until the player has published the real length of the track (it makes the match exact)
+    $cached = $ui.lyrCache.ContainsKey($key)
+    if ($key -ne $ui.lyrPend) {
+      $ui.lyrPend = $key; $ui.lyrPendAt = $now
+      if (-not $cached) { Lyr-Clear; Lyr-Show 'Ищу текст…' }
+    }
+    if (-not $cached) {
+      $waited = $now - $ui.lyrPendAt
+      if ($waited -lt 700.0) { return }
+      if (([double]$st.len -lt 1.0) -and $waited -lt 2000.0) { return }
+    }
+  }
   $ui.lyrReq = $key
   Lyr-Clear
+  $cc = $ui.lyrCache[$key]
+  if ($cc -and (($cc.res.state -eq 'ok') -or (($now - $cc.at) -lt 600000.0))) {
+    $ui.lyrRef = $cc.res
+    Lyr-Apply $cc.res
+    return
+  }
   Lyr-Show 'Ищу текст…'
-  $sync.LyrReq = @{ key = $key; title = [string]$st.title; artist = [string]$st.artist; dur = [double]$st.len }
+  $ui.lyrSeq++
+  $sync.LyrReq = @{ seq = $ui.lyrSeq; key = $key; title = [string]$st.title; artist = [string]$st.artist; dur = [double]$st.len }
 }
 function Lyr-Poll {
   $res = $sync.Lyr
@@ -1919,9 +1968,11 @@ function Lyr-Poll {
   if ([object]::ReferenceEquals($res, $ui.lyrRef)) { return }
   if ([string]$res.key -ne $ui.lyrReq) { return }
   $ui.lyrRef = $res
-  if ($res.state -eq 'ok') { Lyr-Build $res }
-  elseif ($res.state -eq 'err') { Lyr-Show 'Не удалось загрузить текст. Проверь интернет' }
-  else { Lyr-Show 'Для этой песни текста не нашлось' }
+  if ($res.state -ne 'err') {
+    if ($ui.lyrCache.Count -gt 30) { $ui.lyrCache.Clear() }
+    $ui.lyrCache[[string]$res.key] = @{ res = $res; at = (Now-Ms) }
+  }
+  Lyr-Apply $res
 }
 function Lyr-Build($res) {
   Lyr-Clear
@@ -1976,7 +2027,18 @@ function Lyr-Scroll([bool]$instant = $false) {
   $L = $ui.lyr
   if ($L.n -lt 1) { return }
   $ref = [Math]::Max(0, [Math]::Min($L.idx, $L.n - 1))
-  $ty = $L.viewH * 0.4 - ($L.tops[$ref] + $L.hs[$ref] / 2.0)
+  $top = [double]$L.tops[$ref]; $hh = [double]$L.hs[$ref]
+  # measured again now: the numbers taken when the text was built are wrong if the panel was not laid out yet
+  try {
+    $tbr = $L.lines[$ref]
+    if ($tbr.ActualHeight -gt 1.0) {
+      $top = [double]$tbr.TranslatePoint((New-Object System.Windows.Point (0.0, 0.0)), $E.lyrHost).Y
+      $hh = [double]$tbr.ActualHeight
+    }
+  } catch {}
+  $vh = [double]$E.lyrView.ActualHeight
+  if ($vh -lt 60.0) { $vh = [double]$L.viewH }
+  $ty = $vh * 0.4 - ($top + $hh / 2.0)
   $yp = [System.Windows.Media.TranslateTransform]::YProperty
   if ($instant -or $ui.reduceMotion) { $script:lyrT.BeginAnimation($yp, $null); $script:lyrT.Y = $ty }
   else { Anim-To $script:lyrT $yp $ty 620 }
@@ -2022,6 +2084,30 @@ function Lyr-Tick {
   if ($idx -ne $L.idx) { Lyr-Activate $idx }
   elseif ($L.userUntil -gt 0 -and (Now-Ms) -ge $L.userUntil) { $L.userUntil = 0.0; Lyr-Scroll }
 }
+# The Music tab appears: put the progress bar and the lyrics exactly where the song is NOW (no jump from the old state)
+function Music-Resume {
+  try {
+    if ($ui.len -gt 0) {
+      Slider-Set 'prog' ([double]$ui.lastPos / [double]$ui.len) $false
+      $E.mPos.Text = Format-Time ([double]$ui.lastPos)
+      $E.mRem.Text = '-' + (Format-Time ([double]$ui.len - [double]$ui.lastPos))
+    }
+  } catch {}
+  try {
+    $L = $ui.lyr
+    if ($L.n -gt 0) {
+      try { $E.lyrHost.UpdateLayout() } catch {}
+      $L.userUntil = 0.0
+      if ($L.synced -and $L.times) {
+        $p = [double]$ui.lastPos + 0.3
+        $r = [Array]::BinarySearch($L.times, $p)
+        $idx = $(if ($r -ge 0) { $r } else { (-bnot $r) - 1 })
+        $L.idx = -2
+        Lyr-Activate $idx
+      }
+    }
+  } catch { Log "music resume: $($_.Exception.Message)" }
+}
 $E.lyrView.Add_MouseWheel({
   param($snd, $ev)
   $L = $ui.lyr
@@ -2030,7 +2116,11 @@ $E.lyrView.Add_MouseWheel({
   $cur = [double]$script:lyrT.Y
   $ny = $cur + ($ev.Delta / 120.0) * 52.0
   if (-not $L.synced) {
-    $minY = [Math]::Min(24.0, $L.viewH - $L.textH - 24.0)
+    # plain text: the limit is the REAL height of the text (measured now), so it can always be read to the very end
+    $th = [Math]::Max([double]$L.textH, [double]$E.lyrHost.ActualHeight)
+    $vh2 = [double]$E.lyrView.ActualHeight
+    if ($vh2 -lt 60.0) { $vh2 = [double]$L.viewH }
+    $minY = [Math]::Min(24.0, $vh2 - $th - 24.0)
     $ny = [Math]::Max($minY, [Math]::Min(24.0, $ny))
   }
   $script:lyrT.BeginAnimation($yp, $null)
@@ -2210,6 +2300,8 @@ function Render-Weather($wx) {
   $E.wdtUv.Text = Uv-Text ([double]$wx.uv)
   $E.wdtPress.Text = "$($wx.press) мм"
   $hrs = @($wx.hours)
+  # the rows always fill the whole width and never leave a hole: missing cells are collapsed, not hidden
+  $E.wxHourly.Columns = [Math]::Max(1, [Math]::Min(8, $hrs.Count))
   for ($i = 1; $i -le 8; $i++) {
     $whp = $E["wh${i}t"].Parent
     if ($i -le $hrs.Count) {
@@ -2218,10 +2310,11 @@ function Render-Weather($wx) {
       Set-WxIcon $E["wh${i}i"] ([string]$h.icon)
       $E["wh${i}v"].Text = "$($h.v)°"
       $whp.Visibility = 'Visible'
-    } else { $whp.Visibility = 'Hidden' }
+    } else { $whp.Visibility = 'Collapsed' }
   }
-  $E.wxHourly.Parent.Visibility = $(if ($hrs.Count -gt 0) { 'Visible' } else { 'Hidden' })
+  $E.wxHourly.Parent.Visibility = $(if ($hrs.Count -gt 0) { 'Visible' } else { 'Collapsed' })
   $ds = @($wx.days)
+  $E.wxDays.Columns = [Math]::Max(1, [Math]::Min(5, $ds.Count))
   for ($i = 1; $i -le 5; $i++) {
     $card = Up $E["wd${i}d"] 2
     if ($i -le $ds.Count) {
@@ -2229,8 +2322,11 @@ function Render-Weather($wx) {
       $E["wd${i}d"].Text = [string]$d.d
       Set-WxIcon $E["wd${i}i"] ([string]$d.icon)
       $E["wd${i}t"].Text = "$($d.hi)° / $($d.lo)°"
+      $rm = 8.0
+      if ($i -ge $ds.Count) { $rm = 0.0 }
+      $card.Margin = [System.Windows.Thickness]::new(0.0, 0.0, $rm, 0.0)
       $card.Visibility = 'Visible'
-    } else { $card.Visibility = 'Hidden' }
+    } else { $card.Visibility = 'Collapsed' }
   }
   # everything comes in one after another
   Wx-Dim $false
@@ -3475,30 +3571,42 @@ function Shot-Done([string]$msg, [string]$file) {
 }
 function Take-Screenshot {
   if ($ui.expanded) { Collapse }
-  # the island must be gone from the picture: hide the window for a blink
+  # the island must be gone from the picture: hide the window for a blink.
+  # The picture goes to the clipboard FIRST and is saved to the island's own folder (not to "Pictures": Windows
+  # "Controlled folder access" / antivirus blocks PowerShell from writing there). The folder can be changed with "shotDir" in settings.json.
   Later 520 {
-    $file = ''
+    $bmp = $null
     try {
-      $dir = Join-Path ([Environment]::GetFolderPath('MyPictures')) 'Screenshots'
-      if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-      $file = Join-Path $dir ('Island_' + (Get-Date).ToString('yyyyMMdd_HHmmss') + '.png')
       [DI.Native]::Visible($mainHwnd, $false)
       Start-Sleep -Milliseconds 140
       $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
       $bmp = New-Object System.Drawing.Bitmap ($b.Width, $b.Height)
       $gr = [System.Drawing.Graphics]::FromImage($bmp)
-      $gr.CopyFromScreen($b.X, $b.Y, 0, 0, $bmp.Size)
-      $gr.Dispose()
-      [DI.Native]::Visible($mainHwnd, (-not $ui.hidden))
-      $bmp.Save($file, [System.Drawing.Imaging.ImageFormat]::Png)
-      try { [System.Windows.Forms.Clipboard]::SetImage($bmp) } catch {}
-      $bmp.Dispose()
-      Shot-Done 'Скриншот сохранён' $file
+      try { $gr.CopyFromScreen($b.X, $b.Y, 0, 0, $bmp.Size) } finally { $gr.Dispose() }
     } catch {
-      try { [DI.Native]::Visible($mainHwnd, (-not $ui.hidden)) } catch {}
-      Log "screenshot: $($_.Exception.Message)"
-      Shot-Done 'Не получилось' ''
+      Log "screenshot capture: $($_.Exception.Message)"
+      if ($bmp) { $bmp.Dispose(); $bmp = $null }
     }
+    try { [DI.Native]::Visible($mainHwnd, (-not $ui.hidden)) } catch {}
+    if ($bmp) {
+      $inClip = $false
+      try { [System.Windows.Forms.Clipboard]::SetImage($bmp); $inClip = $true } catch { Log "screenshot clipboard: $($_.Exception.Message)" }
+      $file = ''
+      try {
+        $dir = [Environment]::ExpandEnvironmentVariables([string]$cfg.shotDir)
+        if (-not $dir) { $dir = Join-Path $DataDir 'Screenshots' }
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        $f = Join-Path $dir ('Island_' + (Get-Date).ToString('yyyyMMdd_HHmmss') + '.png')
+        $bmp.Save($f, [System.Drawing.Imaging.ImageFormat]::Png)
+        $file = $f
+        # keep the folder small: the newest 40 pictures stay
+        try { Get-ChildItem $dir -Filter 'Island_*.png' | Sort-Object LastWriteTime -Descending | Select-Object -Skip 40 | Remove-Item -Force -ErrorAction SilentlyContinue } catch {}
+      } catch { Log "screenshot save: $($_.Exception.Message)" }
+      $bmp.Dispose()
+      if ($file) { Shot-Done 'Скриншот готов' $file }
+      elseif ($inClip) { Shot-Done 'Скриншот в буфере' '' }
+      else { Shot-Done 'Не получилось' '' }
+    } else { Shot-Done 'Не получилось' '' }
   }
 }
 $E.btnShot.Add_Click({ Take-Screenshot })
@@ -3668,6 +3776,93 @@ function Sync-Pomo {
 } catch { Log ("init c4d failed: " + $_.Exception.Message + " @ line " + $_.InvocationInfo.ScriptLineNumber) }
 
 # ============================================================
+#  Pill texts: what the collapsed pill says.
+#  Music: title / artist / "artist — title" (the pill is exactly as wide as the text needs).
+#  Idle: nothing (clock on hover) / clock / date.
+# ============================================================
+$PILL_MUSIC = [ordered]@{ title = 'Название'; artist = 'Исполнитель'; both = 'Исполнитель — название' }
+$PILL_IDLE = [ordered]@{ hover = 'Пусто'; clock = 'Часы'; date = 'Дата' }
+$MONTHS_RU = @('янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек')
+$DAYS_RU = @('вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб')
+
+function Pill-Text($st) {
+  $t = ([string]$st.title).Trim()
+  $a = ([string]$st.artist).Trim()
+  $m = [string]$cfg.pillMusic
+  if ($m -eq 'artist' -and $a) { return $a }
+  if ($m -eq 'both' -and $a) { return ($a + ' — ' + $t) }
+  return $t
+}
+function Pill-Sig($st) { return (([string]$st.title) + '|' + ([string]$st.artist) + '|' + [string]$cfg.pillMusic) }
+# short text = narrow pill, long text = wide pill (the glass springs to the new width)
+function Set-PillText($st) {
+  $ui.pillSig = Pill-Sig $st
+  $E.cMusicTxt.Text = (Pill-Text $st)
+  $w = 248.0
+  try {
+    $E.cMusicTxt.Measure([System.Windows.Size]::new([double]::PositiveInfinity, 40.0))
+    $w = [Math]::Ceiling(66.0 + [double]$E.cMusicTxt.DesiredSize.Width)
+  } catch { Log "pill measure: $($_.Exception.Message)" }
+  if ($w -lt 120.0) { $w = 120.0 }
+  if ($w -gt 340.0) { $w = 340.0 }
+  $old = [double]$SIZES.music[0]
+  $SIZES.music[0] = $w
+  $E.cMusic.Width = $w
+  if ((-not $ui.expanded) -and $ui.sizeKey -eq 'music' -and [Math]::Abs($old - $w) -gt 0.5) { Retarget 0.38 0.84 }
+}
+function Pill-Refresh {
+  $st = $sync.State
+  if ($st -and $st.mode -eq 'music' -and $st.title) { Set-PillText $st }
+}
+function Idle-Str([string]$m) {
+  $d = Get-Date
+  if ($m -eq 'date') { return ($DAYS_RU[[int]$d.DayOfWeek] + ', ' + [string]$d.Day + ' ' + $MONTHS_RU[$d.Month - 1]) }
+  return $d.ToString('HH:mm')
+}
+function Update-IdleText {
+  $m = [string]$cfg.pillIdle
+  if ($m -eq 'clock' -or $m -eq 'date') {
+    $s = Idle-Str $m
+    if ($E.cIdleTxt.Text -ne $s) { $E.cIdleTxt.Text = $s }
+    if (-not $ui.idleShown) { $ui.idleShown = $true; FadeTo $E.cIdleTxt 1.0 220 }
+  } else {
+    if ($ui.idleShown) { $ui.idleShown = $false; if (-not $ui.hover) { FadeTo $E.cIdleTxt 0.0 150 } }
+    if ($ui.hover -and $ui.mode -eq 'idle') { $E.cIdleTxt.Text = (Get-Date).ToString('HH:mm') }
+  }
+}
+function Pill-Chip([string]$grp, [string]$key, [string]$text, [bool]$sel) {
+  $b = New-Object System.Windows.Controls.Button
+  $b.Style = $E.pillMusicHost.FindResource('PillBtn')
+  $b.Margin = [System.Windows.Thickness]::new(0, 0, 6, 6)
+  $b.Padding = [System.Windows.Thickness]::new(11, 5, 11, 5)
+  $b.Content = $text
+  $b.Tag = ($grp + ':' + $key)
+  $b.Background = New-Object System.Windows.Media.SolidColorBrush $(if ($sel) { [System.Windows.Media.Color]::FromRgb(242, 242, 242) } else { [System.Windows.Media.Color]::FromArgb(0x22, 255, 255, 255) })
+  $b.Foreground = New-Object System.Windows.Media.SolidColorBrush $(if ($sel) { [System.Windows.Media.Color]::FromRgb(16, 16, 20) } else { [System.Windows.Media.Color]::FromRgb(255, 255, 255) })
+  $b.Add_Click({
+    param($snd, $ev)
+    $parts = ([string]$snd.Tag).Split(':')
+    if ($parts[0] -eq 'm') { $cfg.pillMusic = $parts[1]; Pill-Refresh }
+    else { $cfg.pillIdle = $parts[1]; Update-IdleText }
+    Request-Save
+    Sync-PillOpts
+  })
+  return $b
+}
+function Sync-PillOpts {
+  $curM = [string]$cfg.pillMusic
+  $curI = [string]$cfg.pillIdle
+  $hm = $E.pillMusicHost; $hi = $E.pillIdleHost
+  if ($hm.Children.Count -eq 0) {
+    foreach ($k in $PILL_MUSIC.Keys) { [void]$hm.Children.Add((Pill-Chip 'm' ([string]$k) ([string]$PILL_MUSIC[$k]) ($k -eq $curM))) }
+    foreach ($k in $PILL_IDLE.Keys) { [void]$hi.Children.Add((Pill-Chip 'i' ([string]$k) ([string]$PILL_IDLE[$k]) ($k -eq $curI))) }
+    return
+  }
+  foreach ($c in $hm.Children) { Sel-Look $c ([string]$c.Tag -eq ('m:' + $curM)) }
+  foreach ($c in $hi.Children) { Sel-Look $c ([string]$c.Tag -eq ('i:' + $curI)) }
+}
+
+# ============================================================
 #  Poll (250 ms): worker state -> UI
 # ============================================================
 function Update-Battery($st) {
@@ -3815,11 +4010,15 @@ function Update-MusicUi($st) {
   if ($st.title -ne $ui.lastTitle) {
     $hadTitle = ($ui.lastTitle -ne '')
     $ui.lastTitle = $st.title
-    $E.cMusicTxt.Text = $st.title
+    Set-PillText $st
     $E.mTitle.Text = $st.title
     $E.mArtist.Text = if ($st.artist) { $st.artist } else { ' ' }
     if ($hadTitle) { Pop-Title $(if ($playing) { 1.0 } else { 0.6 }) }
   }
+  # the artist can arrive a moment after the title, or the person picks another pill text: the pill follows
+  if ((Pill-Sig $st) -ne $ui.pillSig) { Set-PillText $st }
+  $artTxt = $(if ($st.artist) { [string]$st.artist } else { ' ' })
+  if ($E.mArtist.Text -ne $artTxt) { $E.mArtist.Text = $artTxt }
   if ((-not [object]::ReferenceEquals($st.art, $ui.lastArt)) -or ($st.artKey -ne $ui.lastArtKey)) {
     $ui.lastArt = $st.art; $ui.lastArtKey = $st.artKey
     Set-Art $st.art
@@ -3840,6 +4039,13 @@ function Update-MusicUi($st) {
       if ($playing) { $pos += ($now - $ui.seekAt) / 1000.0 }
     }
     if ($pos -gt $st.len) { $pos = [double]$st.len }
+    # some players report position 0 for a moment (a refresh of their timeline): the progress bar and the lyrics
+    # keep their own clock for about a second before they believe it. A new track or a seek made here is not affected.
+    if ($now -ge $ui.seekHold -and [string]$st.title -ceq [string]$ui.posTitle -and $pos -lt 1.5 -and $ui.lastPos -gt 10.0) {
+      $ui.zeroHits++
+      if ($ui.zeroHits -lt 7) { $pos = [double]$ui.lastPos; if ($playing) { $pos += 0.12 } }
+    } else { $ui.zeroHits = 0 }
+    $ui.posTitle = [string]$st.title
     # SMTC updates lazily: ignore small backward jumps, real seeks are bigger
     $drop = $ui.lastPos - $pos
     if ($drop -gt 0.6 -and $drop -lt 5.0 -and $st.title -eq $ui.lastTitle -and $now -ge $ui.seekHold) { $pos = $ui.lastPos }
@@ -3894,7 +4100,7 @@ function Poll-Tick {
     }
   }
   try { Ics-Tick } catch { $ui.tabErr++; if ($ui.tabErr -lt 8) { Log ("ics: " + $_.Exception.Message) } }
-  if ($ui.hover -and $ui.mode -eq 'idle') { $E.cIdleTxt.Text = (Get-Date).ToString('HH:mm') }
+  try { Update-IdleText } catch { }
 }
 
 $ui.pollErr = 0; $ui.tabErr = 0
@@ -3920,7 +4126,7 @@ $ui.sizeKey = 'idle'; $ui.mode = 'idle'
 Set-Compact 'idle'
 Retarget 0.62 0.72      # soft pop when the island appears
 $timerDt.Start(); $poll.Start(); $keep.Start()
-Log "running v2.4: scale=$($ui.scale) win=($($ui.winX),$($ui.winY)) glassOn=$($ui.glassOn)"
+Log "running v2.5: scale=$($ui.scale) win=($($ui.winX),$($ui.winY)) glassOn=$($ui.glassOn)"
 [void]$app.Run()
 
 try { $sync.Running = $false } catch {}

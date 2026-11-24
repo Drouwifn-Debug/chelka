@@ -798,7 +798,7 @@
                 </StackPanel>
             </UniformGrid>
           </Border>
-          <UniformGrid Grid.Row="4" Columns="5" Rows="1">
+          <UniformGrid x:Name="wxDays" Grid.Row="4" Columns="5" Rows="1">
               <Border CornerRadius="20" Background="#14FFFFFF" BorderBrush="#1CFFFFFF" BorderThickness="1" Margin="0,0,8,0" Padding="0,8">
                 <StackPanel VerticalAlignment="Center">
                   <TextBlock x:Name="wd1d" Text="" Style="{StaticResource CardTxt}" FontSize="11" HorizontalAlignment="Center"/>
@@ -1097,31 +1097,39 @@
         <Grid x:Name="mView" Visibility="Hidden" Margin="26,62,26,22" RenderTransformOrigin="0.5,0">
           <Grid.RenderTransform><TranslateTransform Y="0"/></Grid.RenderTransform>
 
-          <Grid.RowDefinitions><RowDefinition Height="1.25*"/><RowDefinition Height="1*"/><RowDefinition Height="1.05*"/></Grid.RowDefinitions>
-          <Border Grid.Row="0" CornerRadius="22" Background="#14FFFFFF" BorderBrush="#1CFFFFFF" BorderThickness="1" Padding="18,12,18,10" Margin="0,0,0,10">
-            <StackPanel VerticalAlignment="Center">
-              <TextBlock Text="ТЕМА СТЕКЛА" Style="{StaticResource SecLabel}" Margin="0,0,0,10"/>
-              <WrapPanel x:Name="themeHost"/>
-            </StackPanel>
-          </Border>
-          <Border Grid.Row="1" CornerRadius="22" Background="#14FFFFFF" BorderBrush="#1CFFFFFF" BorderThickness="1" Padding="18,12,18,12" Margin="0,0,0,10">
-            <StackPanel VerticalAlignment="Center">
-              <TextBlock Text="АКЦЕНТНЫЙ ЦВЕТ" Style="{StaticResource SecLabel}" Margin="0,0,0,10"/>
-              <WrapPanel x:Name="dotsHost" Margin="0,0,0,6"/>
-              <Border x:Name="colPrev" Height="8" CornerRadius="4" Background="#F2F2F2"/>
-              <TextBlock Text="Цвет эквалайзера, прогресса и подсветки" Foreground="#70FFFFFF" FontSize="10.5" Margin="0,6,0,0"/>
-            </StackPanel>
-          </Border>
-          <Border Grid.Row="2" CornerRadius="22" Background="#14FFFFFF" BorderBrush="#1CFFFFFF" BorderThickness="1" Padding="18,12,18,12">
-            <StackPanel VerticalAlignment="Center">
-              <TextBlock Text="LIQUID GLASS" Style="{StaticResource SecLabel}" Margin="0,0,0,10"/>
-              <Grid Margin="0,0,0,10">
-                <TextBlock Text="Жидкое стекло (размытие фона)" Style="{StaticResource RowTxt}"/>
-                <ToggleButton x:Name="swGlass" Style="{StaticResource Switch}" HorizontalAlignment="Right"/>
-              </Grid>
-              <Grid>
+          <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+
+          <!-- left: glass theme + accent colour -->
+          <Grid Grid.Column="0">
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+            <Border Grid.Row="0" CornerRadius="22" Background="#14FFFFFF" BorderBrush="#1CFFFFFF" BorderThickness="1" Padding="18,12,18,6" Margin="0,0,0,10">
+              <StackPanel>
+                <TextBlock Text="ТЕМА СТЕКЛА" Style="{StaticResource SecLabel}" Margin="0,0,0,10"/>
+                <WrapPanel x:Name="themeHost"/>
+              </StackPanel>
+            </Border>
+            <Border Grid.Row="1" CornerRadius="22" Background="#14FFFFFF" BorderBrush="#1CFFFFFF" BorderThickness="1" Padding="18,12,18,12">
+              <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="АКЦЕНТНЫЙ ЦВЕТ" Style="{StaticResource SecLabel}" Margin="0,0,0,10"/>
+                <WrapPanel x:Name="dotsHost" Margin="0,0,0,6"/>
+                <Border x:Name="colPrev" Height="8" CornerRadius="4" Background="#F2F2F2"/>
+                <TextBlock Text="Цвет эквалайзера, прогресса и подсветки" Foreground="#70FFFFFF" FontSize="10.5" Margin="0,6,0,0" TextTrimming="CharacterEllipsis"/>
+              </StackPanel>
+            </Border>
+          </Grid>
+
+          <!-- right: liquid glass + texts of the pill -->
+          <Grid Grid.Column="2">
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+            <Border Grid.Row="0" CornerRadius="22" Background="#14FFFFFF" BorderBrush="#1CFFFFFF" BorderThickness="1" Padding="18,12,18,14" Margin="0,0,0,10">
+              <StackPanel>
+                <TextBlock Text="LIQUID GLASS" Style="{StaticResource SecLabel}" Margin="0,0,0,10"/>
+                <Grid Margin="0,0,0,12">
+                  <TextBlock Text="Жидкое стекло (размытие фона)" Style="{StaticResource RowTxt}" TextTrimming="CharacterEllipsis" Margin="0,0,52,0"/>
+                  <ToggleButton x:Name="swGlass" Style="{StaticResource Switch}" HorizontalAlignment="Right"/>
+                </Grid>
                 <TextBlock Text="Прозрачность" Style="{StaticResource RowTxt}"/>
-                <Grid HorizontalAlignment="Right" VerticalAlignment="Center">
+                <Grid HorizontalAlignment="Left" VerticalAlignment="Center" Margin="0,10,0,0">
                   <Grid x:Name="alHit" Width="230" Height="28" Background="Transparent" Cursor="Hand" >
                 <Border x:Name="alTrack" Height="6" CornerRadius="5" Background="#33FFFFFF" VerticalAlignment="Center" IsHitTestVisible="False"/>
                 <Border x:Name="alFill" Height="6" CornerRadius="5" Background="#F2F2F2" HorizontalAlignment="Left" VerticalAlignment="Center" Width="0" IsHitTestVisible="False"/>
@@ -1135,9 +1143,18 @@
                 </Border>
               </Grid>
                 </Grid>
-              </Grid>
-            </StackPanel>
-          </Border>
+              </StackPanel>
+            </Border>
+            <Border Grid.Row="1" CornerRadius="22" Background="#14FFFFFF" BorderBrush="#1CFFFFFF" BorderThickness="1" Padding="18,12,18,8">
+              <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="ТЕКСТ ПИЛЮЛИ" Style="{StaticResource SecLabel}" Margin="0,0,0,8"/>
+                <TextBlock Text="Когда играет музыка" Style="{StaticResource CardTxt}" FontSize="11" Margin="0,0,0,6"/>
+                <WrapPanel x:Name="pillMusicHost"/>
+                <TextBlock Text="В покое" Style="{StaticResource CardTxt}" FontSize="11" Margin="0,4,0,6"/>
+                <WrapPanel x:Name="pillIdleHost"/>
+              </StackPanel>
+            </Border>
+          </Grid>
 
         </Grid>
 

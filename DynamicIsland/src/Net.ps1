@@ -5,12 +5,15 @@
 # ============================================================
 $ErrorActionPreference = 'Continue'
 $inv = [Globalization.CultureInfo]::InvariantCulture
+# this script runs in three runspaces: 'lyr' (song lyrics), 'wx' (weather + calendar), 'city' (city search),
+# so a slow request of one kind never delays the others
+if (-not $role) { $role = 'all' }
 function NLog($m) { try { $sync.Log.Enqueue("net: $m") } catch {} }
 
 function Get-Text([string]$url, [int]$timeoutMs = 9000) {
   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
   $req = [Net.HttpWebRequest]::Create($url)
-  $req.UserAgent = 'DynamicIsland/2.4 (desktop widget)'
+  $req.UserAgent = 'DynamicIsland/2.5 (desktop widget)'
   $req.Timeout = $timeoutMs
   $req.ReadWriteTimeout = $timeoutMs
   $req.AutomaticDecompression = [Net.DecompressionMethods]::GZip -bor [Net.DecompressionMethods]::Deflate
@@ -64,23 +67,26 @@ function WwoKey([int]$c) {
   return 'rain'
 }
 $script:autoGeo = $null
+$script:autoGeoAt = 0
 function Get-AutoGeo {
-  if ($script:autoGeo) { return $script:autoGeo }
+  # the place found by IP is remembered for 30 minutes (a VPN / a trip changes it)
+  $age = [Environment]::TickCount - $script:autoGeoAt
+  if ($script:autoGeo -and $age -ge 0 -and $age -lt 1800000) { return $script:autoGeo }
   try {
-    $g = Get-Json 'https://ipwho.is/?lang=ru'
-    if ($g.latitude) { $script:autoGeo = @{ lat = [double]$g.latitude; lon = [double]$g.longitude; city = [string]$g.city }; return $script:autoGeo }
+    $g = Get-Json 'https://ipwho.is/?lang=ru' 7000
+    if ($g.latitude) { $script:autoGeo = @{ lat = [double]$g.latitude; lon = [double]$g.longitude; city = [string]$g.city }; $script:autoGeoAt = [Environment]::TickCount; return $script:autoGeo }
   } catch { NLog "ipwho.is failed: $($_.Exception.Message)" }
   try {
-    $g = Get-Json 'https://ipapi.co/json/'
-    if ($g.latitude) { $script:autoGeo = @{ lat = [double]$g.latitude; lon = [double]$g.longitude; city = [string]$g.city }; return $script:autoGeo }
+    $g = Get-Json 'https://ipapi.co/json/' 7000
+    if ($g.latitude) { $script:autoGeo = @{ lat = [double]$g.latitude; lon = [double]$g.longitude; city = [string]$g.city }; $script:autoGeoAt = [Environment]::TickCount; return $script:autoGeo }
   } catch { NLog "ipapi.co failed: $($_.Exception.Message)" }
+  if ($script:autoGeo) { return $script:autoGeo }
   return $null
 }
 function Get-GeoByName([string]$name) {
   try {
-    $r = Get-Json ('https://geocoding-api.open-meteo.com/v1/search?name=' + [uri]::EscapeDataString($name) + '&count=1&language=ru&format=json')
-    $x = @($r.results) | Where-Object { $_ } | Select-Object -First 1
-    if ($x) { return @{ lat = [double]$x.latitude; lon = [double]$x.longitude; city = [string]$x.name } }
+    $r = @(Search-City $name)
+    if ($r.Count -gt 0) { return @{ lat = [double]$r[0].lat; lon = [double]$r[0].lon; city = [string]$r[0].n } }
   } catch { NLog "geocode failed: $($_.Exception.Message)" }
   return $null
 }
@@ -110,7 +116,7 @@ function Get-Weather($req) {
          '&hourly=temperature_2m,weather_code,is_day,precipitation_probability' +
          '&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_probability_max' +
          '&timezone=auto&forecast_days=6&wind_speed_unit=kmh'
-    $w = Get-Json $u 12000
+    $w = Get-Json $u 8000
     $cur = $w.current
     $days = @()
     for ($d = 0; $d -lt 5; $d++) {
@@ -145,52 +151,168 @@ function Get-Weather($req) {
       hours = $hours; days = $days
     }
   } catch { NLog "open-meteo failed: $($_.Exception.Message)" }
-  # fallback: wttr.in (current + 3 days, no hourly strip)
+  # fallback: wttr.in (current + 3 days + a strip of the next hours, every 3 hours)
   try {
-    $wx = Get-Json ('https://wttr.in/' + $la + ',' + $lo + '?format=j1') 12000
+    $wx = Get-Json ('https://wttr.in/' + $la + ',' + $lo + '?format=j1') 9000
     $cc = $wx.current_condition[0]
     $days = @()
     for ($d = 0; $d -lt 3; $d++) {
       $dt = [datetime]::ParseExact([string]$wx.weather[$d].date, 'yyyy-MM-dd', $inv)
       $days += , @{ d = (Get-DayName $dt $d); icon = (WwoKey ([int]$wx.weather[$d].hourly[4].weatherCode)); hi = [int]$wx.weather[$d].maxtempC; lo = [int]$wx.weather[$d].mintempC }
     }
+    $nowLoc = Get-Date
+    try { $nowLoc = [datetime]::ParseExact(([string]$cc.localObsDateTime).Trim(), 'yyyy-MM-dd hh:mm tt', $inv) } catch {}
+    $hours = @()
+    try {
+      $slots = @()
+      for ($d = 0; $d -lt 3; $d++) {
+        $day0 = [datetime]::ParseExact([string]$wx.weather[$d].date, 'yyyy-MM-dd', $inv)
+        foreach ($e in @($wx.weather[$d].hourly)) {
+          $hh = [int]([int]$e.time / 100)
+          $slots += , @{ at = $day0.AddHours($hh); h = $hh; code = [int]$e.weatherCode; v = [int]$e.tempC }
+        }
+      }
+      $from = $nowLoc.AddMinutes(-100)
+      $k = 0
+      foreach ($sl in $slots) {
+        if ($sl.at -lt $from) { continue }
+        if ($k -ge 8) { break }
+        $ic = WwoKey $sl.code
+        if ($ic -eq 'sun' -and ($sl.h -lt 6 -or $sl.h -ge 20)) { $ic = 'moon' }
+        $lab = 'Сейчас'
+        if ($k -gt 0) { $lab = ('{0:00}:00' -f $sl.h) }
+        $hours += , @{ t = $lab; icon = $ic; v = $sl.v }
+        $k++
+      }
+    } catch { NLog "wttr hourly: $($_.Exception.Message)" }
+    $sunrise = ''; $sunset = ''
+    try {
+      $ast = $wx.weather[0].astronomy[0]
+      $sunrise = ([datetime]::ParseExact(([string]$ast.sunrise).Trim(), 'hh:mm tt', $inv)).ToString('HH:mm')
+      $sunset = ([datetime]::ParseExact(([string]$ast.sunset).Trim(), 'hh:mm tt', $inv)).ToString('HH:mm')
+    } catch {}
+    $ik = WwoKey ([int]$cc.weatherCode)
+    if ($ik -eq 'sun' -and ($nowLoc.Hour -lt 6 -or $nowLoc.Hour -ge 20)) { $ik = 'moon' }
     return @{
       ok = $true; key = [string]$req.key; city = $city; lat = $lat; lon = $lon; at = [long]([DateTime]::UtcNow.Ticks / 10000)
       temp = [int]$cc.temp_C; feels = [int]$cc.FeelsLikeC; hum = [int]$cc.humidity; wind = [int]$cc.windspeedKmph
       press = [int][Math]::Round([double]$cc.pressure * 0.75006); uv = [double]$cc.uvIndex; rainP = -1
-      cond = ''; icon = (WwoKey ([int]$cc.weatherCode)); sunrise = ''; sunset = ''
+      cond = (KeyText $ik); icon = $ik; sunrise = $sunrise; sunset = $sunset
       hi = [int]$wx.weather[0].maxtempC; lo = [int]$wx.weather[0].mintempC
-      hours = @(); days = $days
+      hours = $hours; days = $days
     }
   } catch { NLog "wttr.in failed: $($_.Exception.Message)" }
   return $null
 }
+function KeyText([string]$k) {
+  if ($k -eq 'sun' -or $k -eq 'moon') { return 'Ясно' }
+  if ($k -eq 'pcloud') { return 'Переменная облачность' }
+  if ($k -eq 'fog') { return 'Туман' }
+  if ($k -eq 'drizzle') { return 'Морось' }
+  if ($k -eq 'rain') { return 'Дождь' }
+  if ($k -eq 'snow') { return 'Снег' }
+  if ($k -eq 'storm') { return 'Гроза' }
+  return 'Облачно'
+}
 
+# city search: open-meteo first, OpenStreetMap Nominatim as a second source (when the first one is unreachable or knows nothing)
 function Search-City([string]$q) {
   $out = @()
-  $r = Get-Json ('https://geocoding-api.open-meteo.com/v1/search?name=' + [uri]::EscapeDataString($q) + '&count=6&language=ru&format=json')
-  foreach ($x in @($r.results)) {
-    if (-not $x) { continue }
-    $sub = @()
-    if ($x.admin1) { $sub += [string]$x.admin1 }
-    if ($x.country) { $sub += [string]$x.country }
-    $out += , @{ n = [string]$x.name; sub = ($sub -join ', '); lat = [double]$x.latitude; lon = [double]$x.longitude }
-  }
+  $failed = $false
+  try {
+    $r = Get-Json ('https://geocoding-api.open-meteo.com/v1/search?name=' + [uri]::EscapeDataString($q) + '&count=6&language=ru&format=json') 7000
+    foreach ($x in @($r.results)) {
+      if (-not $x) { continue }
+      $sub = @()
+      if ($x.admin1) { $sub += [string]$x.admin1 }
+      if ($x.country) { $sub += [string]$x.country }
+      $out += , @{ n = [string]$x.name; sub = ($sub -join ', '); lat = [double]$x.latitude; lon = [double]$x.longitude }
+    }
+  } catch { NLog "geocoding (open-meteo): $($_.Exception.Message)"; $failed = $true }
+  if ($out.Count -gt 0) { return $out }
+  try {
+    $r2 = Get-Json ('https://nominatim.openstreetmap.org/search?q=' + [uri]::EscapeDataString($q) + '&format=jsonv2&limit=6&addressdetails=1&accept-language=ru&featuretype=settlement') 8000
+    foreach ($x in @($r2)) {
+      if (-not $x) { continue }
+      $nm = [string]$x.name
+      if (-not $nm) { $nm = ([string]$x.display_name).Split(',')[0].Trim() }
+      if (-not $nm) { continue }
+      $sub = @()
+      try {
+        if ($x.address.state) { $sub += [string]$x.address.state }
+        if ($x.address.country) { $sub += [string]$x.address.country }
+      } catch {}
+      $out += , @{ n = $nm; sub = ($sub -join ', '); lat = [double]::Parse([string]$x.lat, $inv); lon = [double]::Parse([string]$x.lon, $inv) }
+    }
+    $failed = $false
+  } catch { NLog "geocoding (nominatim): $($_.Exception.Message)" }
+  if ($out.Count -eq 0 -and $failed) { throw 'city search unavailable' }
   return $out
 }
 
 # ---------------------------------------------------------------- lyrics (LRCLIB, free, no key)
+# Titles and artists come in many shapes ("Artist - Song (Official Video)", "Artist - Topic", "Song feat. X"),
+# so the lookup cleans them, tries several spellings and picks the most COMPLETE and best matching version.
 function Clean-Title([string]$t) {
-  $t = $t -replace '\s*[\(\[][^\)\]]*(feat|ft\.|remaster|live|version|edit|remix|official|lyrics|audio|video|из фильма|ost)[^\)\]]*[\)\]]', ''
-  $t = $t -replace '\s+-\s+(remaster(ed)?|live|radio edit|single version|\d{4}).*$', ''
+  $t = [string]$t
+  $t = $t -replace '(?i)\s*[\(\[\{][^\)\]\}]*\b(feat\.?|ft\.?|featuring|remaster(ed)?|live|version|edit|remix|official|lyrics?|audio|video|visuali[sz]er|clip|karaoke|cover|ost|soundtrack|hd|4k|из фильма|саундтрек|премьера)\b[^\)\]\}]*[\)\]\}]', ''
+  $t = $t -replace '(?i)\s+[-–—]\s+(remaster(ed)?|live|radio edit|single version|album version|official|lyrics?|audio|\d{4}).*$', ''
+  $t = $t -replace '(?i)\s+(feat\.?|ft\.?|featuring)\s+.*$', ''
+  return (($t -replace '\s+', ' ').Trim())
+}
+function Clean-Artist([string]$a) {
+  $a = [string]$a
+  $a = $a -replace '(?i)\s*[-–—]\s*topic\s*$', ''
+  $a = $a -replace '(?i)\s*vevo\s*$', ''
+  $a = $a -replace '(?i)\s*\(official\)\s*$', ''
+  return ($a.Trim())
+}
+function Norm([string]$s) {
+  if (-not $s) { return '' }
+  $t = $s.ToLowerInvariant().Replace('ё', 'е')
+  $t = [regex]::Replace($t, '[^\p{L}\p{Nd}]+', ' ')
   return $t.Trim()
+}
+function Artist-Match([string]$want, [string]$have) {
+  $a = Norm $want; $b = Norm $have
+  if ((-not $a) -or (-not $b)) { return $false }
+  if ($a -ceq $b) { return $true }
+  if ($a.Length -ge 3 -and $b.Length -ge 3 -and ($a.Contains($b) -or $b.Contains($a))) { return $true }
+  $hb = ' ' + $b + ' '
+  foreach ($w in ($a -split ' ')) {
+    if ($w.Length -ge 4 -and $w -ne 'feat' -and $w -ne 'with' -and $hb.Contains(' ' + $w + ' ')) { return $true }
+  }
+  return $false
+}
+# 3 = same title, 2 = one contains the other, 0 = different song
+function Title-Score([string]$cand, $wants) {
+  $c = Norm $cand
+  if (-not $c) { return 0 }
+  $best = 0
+  foreach ($w0 in $wants) {
+    $w = [string]$w0
+    if (-not $w) { continue }
+    if ($c -ceq $w) { return 3 }
+    if ($c.Length -ge 3 -and $w.Length -ge 3 -and ($c.Contains($w) -or $w.Contains($c))) { $best = 2 }
+  }
+  return $best
+}
+# time of the last stamp and number of stamps of an LRC text (to spot a version that stops half-way)
+function Lrc-Stat([string]$lrc) {
+  $last = 0.0; $n = 0
+  foreach ($m in [regex]::Matches($lrc, '\[(\d{1,3}):(\d{2})(?:[.:]\d{1,3})?\]')) {
+    $t = [double]$m.Groups[1].Value * 60.0 + [double]$m.Groups[2].Value
+    if ($t -gt $last) { $last = $t }
+    $n++
+  }
+  return @{ last = $last; n = $n }
 }
 function Parse-Lrc([string]$lrc) {
   $items = New-Object 'System.Collections.Generic.List[object]'
   foreach ($ln in ($lrc -split "\r?\n")) {
     $ms = [regex]::Matches($ln, '\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]')
     if ($ms.Count -eq 0) { continue }
-    $txt = ([regex]::Replace($ln, '\[[^\]]*\]', '')).Trim()
+    $txt = ([regex]::Replace($ln, '\[[^\]]*\]|<\d{1,3}:\d{2}(?:[.:]\d{1,3})?>', '')).Trim()
     if (-not $txt) { continue }
     foreach ($m in $ms) {
       $t = [double]$m.Groups[1].Value * 60.0 + [double]$m.Groups[2].Value
@@ -206,48 +328,109 @@ function Parse-Lrc([string]$lrc) {
 }
 function Get-Lyrics($req) {
   $title = [string]$req.title; $artist = [string]$req.artist; $dur = [double]$req.dur
-  $qt = Clean-Title $title
-  $queries = @()
-  if ($artist) {
-    $queries += ('track_name=' + [uri]::EscapeDataString($qt) + '&artist_name=' + [uri]::EscapeDataString($artist))
-    $queries += ('q=' + [uri]::EscapeDataString(($artist + ' ' + $qt)))
-  } else {
-    $queries += ('q=' + [uri]::EscapeDataString($qt))
+  $ct = Clean-Title $title
+  if (-not $ct) { $ct = $title.Trim() }
+  $ca = Clean-Artist $artist
+  $firstA = $ca
+  if ($ca) { $firstA = ([regex]::Split($ca, '\s*(?:,|;|&|/|\sfeat\.?\s|\sft\.?\s)\s*')[0]).Trim() }
+
+  $wantT = New-Object System.Collections.ArrayList
+  $wantA = New-Object System.Collections.ArrayList
+  $pairs = New-Object System.Collections.ArrayList
+  [void]$wantT.Add((Norm $ct))
+  if ($ct -ne $title) { [void]$wantT.Add((Norm $title)) }
+  if ($ca) {
+    [void]$wantA.Add($ca)
+    [void]$pairs.Add(@{ t = $ct; a = $ca })
+    if ($firstA -and $firstA -ne $ca) { [void]$wantA.Add($firstA); [void]$pairs.Add(@{ t = $ct; a = $firstA }) }
   }
-  if ($qt -ne $title -and $artist) { $queries += ('q=' + [uri]::EscapeDataString(($artist + ' ' + $title))) }
-  $best = $null; $bestScore = -1
-  $failed = $false
+  # "Artist - Song" written inside the title (typical for YouTube): try both orders
+  $mm = [regex]::Match($ct, '^(.+?)\s+[-–—|]\s+(.+)$')
+  if ($mm.Success) {
+    $p1 = $mm.Groups[1].Value.Trim(); $p2 = $mm.Groups[2].Value.Trim()
+    [void]$wantT.Add((Norm $p1)); [void]$wantT.Add((Norm $p2))
+    [void]$wantA.Add($p1); [void]$wantA.Add($p2)
+    [void]$pairs.Add(@{ t = $p2; a = $p1 })
+    [void]$pairs.Add(@{ t = $p1; a = $p2 })
+  }
+
+  $queries = New-Object System.Collections.ArrayList
+  foreach ($pr in $pairs) {
+    $qs = 'track_name=' + [uri]::EscapeDataString([string]$pr.t) + '&artist_name=' + [uri]::EscapeDataString([string]$pr.a)
+    if (-not $queries.Contains($qs)) { [void]$queries.Add($qs) }
+  }
+  if ($ca) {
+    $qa = 'q=' + [uri]::EscapeDataString(($ca + ' ' + $ct))
+    if (-not $queries.Contains($qa)) { [void]$queries.Add($qa) }
+  }
+  $qb = 'q=' + [uri]::EscapeDataString($ct)
+  if (-not $queries.Contains($qb)) { [void]$queries.Add($qb) }
+  if ($ct -ne $title) {
+    $qc = 'q=' + [uri]::EscapeDataString($title)
+    if (-not $queries.Contains($qc)) { [void]$queries.Add($qc) }
+  }
+
+  $best = $null; $bestScore = -999.0; $okN = 0; $failN = 0; $tries = 0
   foreach ($q in $queries) {
+    if ($tries -ge 7) { break }
+    $tries++
     $arr = @()
-    try { $arr = @(Get-Json ('https://lrclib.net/api/search?' + $q) 10000) | Where-Object { $_ } }
-    catch { NLog "lrclib: $($_.Exception.Message)"; $failed = $true; continue }
+    try {
+      $arr = @(Get-Json ('https://lrclib.net/api/search?' + $q) 8000) | Where-Object { $_ }
+      $okN++
+    } catch {
+      NLog "lrclib: $($_.Exception.Message)"
+      $failN++
+      if ($failN -ge 2 -and $okN -eq 0) { break }
+      continue
+    }
     foreach ($c in $arr) {
       $hasS = [bool]$c.syncedLyrics; $hasP = [bool]$c.plainLyrics
       if (-not ($hasS -or $hasP)) { continue }
+      $ts = Title-Score ([string]$c.trackName) $wantT
+      if ($ts -eq 0) { continue }
       $am = $false
-      if ($artist -and $c.artistName) {
-        $a1 = ([string]$c.artistName).ToLower(); $a2 = $artist.ToLower()
-        $am = ($a1.Contains($a2) -or $a2.Contains($a1))
-      }
+      foreach ($wa in $wantA) { if (Artist-Match ([string]$wa) ([string]$c.artistName)) { $am = $true; break } }
       $dm = 0
       if ($dur -gt 1 -and $c.duration) {
         $dd = [Math]::Abs([double]$c.duration - $dur)
-        if ($dd -le 2.5) { $dm = 2 } elseif ($dd -le 6) { $dm = 1 }
+        if ($dd -le 2.5) { $dm = 3 } elseif ($dd -le 6) { $dm = 2 } elseif ($dd -le 12) { $dm = 1 }
       }
-      if ((-not $am) -and $dm -eq 0) { continue }
-      $score = ($(if ($hasS) { 10 } else { 0 })) + ($(if ($am) { 4 } else { 0 })) + $dm * 3 + ($(if ($hasP) { 1 } else { 0 }))
+      if ($wantA.Count -gt 0 -and (-not $am) -and $dm -eq 0) { continue }
+      $score = $ts * 3.0 + $dm * 3.0
+      if ($am) { $score += 5 }
+      if ($hasS) { $score += 6 }
+      if ($hasP) { $score += 1 }
+      if ($hasS) {
+        # a synced text that ends half-way through the song is worse than a complete one
+        $stt = Lrc-Stat ([string]$c.syncedLyrics)
+        $refd = 0.0
+        if ($c.duration) { $refd = [double]$c.duration }
+        if ($refd -lt 30 -and $dur -gt 30) { $refd = $dur }
+        if ($refd -gt 30 -and $stt.n -ge 2 -and (($stt.last / $refd) -lt 0.55)) { $score -= 8 }
+      }
       if ($score -gt $bestScore) { $bestScore = $score; $best = $c }
     }
-    if ($best -and $bestScore -ge 14) { break }
+    if ($best -and $bestScore -ge 24) { break }
   }
   if (-not $best) {
-    if ($failed) { return @{ key = [string]$req.key; state = 'err' } }
+    if ($okN -eq 0 -and $failN -gt 0) { return @{ key = [string]$req.key; state = 'err' } }
     return @{ key = [string]$req.key; state = 'none' }
   }
+  $useSynced = $false
+  $parsed = $null
   if ($best.syncedLyrics) {
-    $p = Parse-Lrc ([string]$best.syncedLyrics)
-    if ($p.times.Count -ge 2) { return @{ key = [string]$req.key; state = 'ok'; synced = $true; times = $p.times; texts = $p.texts } }
+    $parsed = Parse-Lrc ([string]$best.syncedLyrics)
+    if ($parsed.times.Count -ge 2) {
+      $useSynced = $true
+      if ($best.plainLyrics) {
+        # the synced text has far fewer lines than the plain one: it is only a piece of the song, show the whole plain text
+        $pn = @(([string]$best.plainLyrics) -split "\r?\n" | Where-Object { $_.Trim() }).Count
+        if ($pn -ge 8 -and $parsed.times.Count -lt ($pn * 0.6)) { $useSynced = $false }
+      }
+    }
   }
+  if ($useSynced) { return @{ key = [string]$req.key; state = 'ok'; synced = $true; times = $parsed.times; texts = $parsed.texts } }
   if ($best.plainLyrics) {
     $lines = @(([string]$best.plainLyrics) -split "\r?\n")
     return @{ key = [string]$req.key; state = 'ok'; synced = $false; times = $null; texts = [string[]]$lines }
@@ -335,27 +518,27 @@ function Get-Ics([string]$url) {
 }
 
 # ---------------------------------------------------------------- main loop
-$lastCity = -1; $lastLyr = ''; $lastWx = -1; $lastIcs = -1
-NLog 'started'
+$lastCity = -1; $lastLyr = -1; $lastWx = -1; $lastIcs = -1
+NLog "started ($role)"
 while ($sync.Running) {
   $busy = $false
 
   $cq = $sync.CityQ
-  if ($cq -and ([int]$cq.id -ne $lastCity)) {
+  if (($role -eq 'all' -or $role -eq 'city') -and $cq -and ([int]$cq.id -ne $lastCity)) {
     $lastCity = [int]$cq.id; $busy = $true
     try { $sync.CityRes = @{ id = $cq.id; q = $cq.q; ok = $true; items = @(Search-City ([string]$cq.q)) } }
     catch { NLog "city search: $($_.Exception.Message)"; $sync.CityRes = @{ id = $cq.id; q = $cq.q; ok = $false; items = @() } }
   }
 
   $lr = $sync.LyrReq
-  if ($lr -and ([string]$lr.key -ne $lastLyr)) {
-    $lastLyr = [string]$lr.key; $busy = $true
+  if (($role -eq 'all' -or $role -eq 'lyr') -and $lr -and ([int]$lr.seq -ne $lastLyr)) {
+    $lastLyr = [int]$lr.seq; $busy = $true
     try { $sync.Lyr = (Get-Lyrics $lr) }
     catch { NLog "lyrics: $($_.Exception.Message)"; $sync.Lyr = @{ key = [string]$lr.key; state = 'err' } }
   }
 
   $wr = $sync.WxReq
-  if ($wr -and ([int]$wr.seq -ne $lastWx)) {
+  if (($role -eq 'all' -or $role -eq 'wx') -and $wr -and ([int]$wr.seq -ne $lastWx)) {
     $lastWx = [int]$wr.seq; $busy = $true
     $res = $null
     try { $res = Get-Weather $wr } catch { NLog "weather: $($_.Exception.Message)" }
@@ -364,7 +547,7 @@ while ($sync.Running) {
   }
 
   $ir = $sync.IcsReq
-  if ($ir -and ([int]$ir.seq -ne $lastIcs)) {
+  if (($role -eq 'all' -or $role -eq 'wx') -and $ir -and ([int]$ir.seq -ne $lastIcs)) {
     $lastIcs = [int]$ir.seq; $busy = $true
     try { $sync.Ics = @{ seq = $ir.seq; ok = $true; items = @(Get-Ics ([string]$ir.url)) } }
     catch { NLog "ics: $($_.Exception.Message)"; $sync.Ics = @{ seq = $ir.seq; ok = $false; items = @() } }
