@@ -13,7 +13,7 @@ function NLog($m) { try { $sync.Log.Enqueue("net: $m") } catch {} }
 function Get-Text([string]$url, [int]$timeoutMs = 9000) {
   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
   $req = [Net.HttpWebRequest]::Create($url)
-  $req.UserAgent = 'DynamicIsland/2.5 (desktop widget)'
+  $req.UserAgent = 'DynamicIsland/2.6 (desktop widget)'
   $req.Timeout = $timeoutMs
   $req.ReadWriteTimeout = $timeoutMs
   $req.AutomaticDecompression = [Net.DecompressionMethods]::GZip -bor [Net.DecompressionMethods]::Deflate

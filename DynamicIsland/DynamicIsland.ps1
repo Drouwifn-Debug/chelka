@@ -1,5 +1,5 @@
 ﻿# ============================================================
-#  Dynamic Island for Windows  v2.5   (PowerShell 5.1 + WPF, no dependencies)
+#  Dynamic Island for Windows  v2.6   (PowerShell 5.1 + WPF, no dependencies)
 #  Liquid Glass pill: blurred snapshot of the screen behind it, clipped to the
 #  pill shape, spring morphing, music + lyrics / to-do + calendar / weather /
 #  system load / sound mixer / clipboard / sites / file shelf / timer + pomodoro.
@@ -26,7 +26,7 @@ trap {
   if ($Console) { Write-Host "Нажми Enter, чтобы закрыть..."; [void](Read-Host) }
   exit 1
 }
-Log "=== start v2.5  PS $($PSVersionTable.PSVersion)  dir=$ScriptDir"
+Log "=== start v2.6  PS $($PSVersionTable.PSVersion)  dir=$ScriptDir"
 
 # ---- single instance ----
 $script:mutex = New-Object System.Threading.Mutex($false, 'Global\DynamicIslandPS_v2')
@@ -53,7 +53,7 @@ $cfg = @{
   accent = '242,242,242'; eq = $true; charge = $true; glass = $true; glassAlpha = 55
   hideFull = $true; hoverClock = $true; city = ''; favicons = $true
   theme = 'auto'; hotkey = 'Ctrl+Alt+I'; icsUrl = ''
-  pillMusic = 'title'; pillIdle = 'hover'; shotDir = ''
+  pillMusic = 'title'; pillIdle = 'hover'; shotDir = ''; lyrOn = $true
   cities = @(); cityIdx = -1; pins = @(); shelf = @(); todos = @(); events = @()
   sites = @(
     @{ n = 'YouTube'; u = 'https://www.youtube.com' }
@@ -110,6 +110,7 @@ function Load-Settings {
   $cfg.pillIdle = [string]$cfg.pillIdle
   if (@('hover', 'clock', 'date') -notcontains $cfg.pillIdle) { $cfg.pillIdle = 'hover' }
   $cfg.shotDir = [string]$cfg.shotDir
+  $cfg.lyrOn = [bool]$cfg.lyrOn
 }
 function Save-Settings {
   try { ($cfg | ConvertTo-Json -Depth 6) | Set-Content -Path $SetFile -Encoding UTF8 }
@@ -1923,6 +1924,7 @@ function Lyr-Apply($res) {
 }
 # ask for the lyrics of the track that is playing now (only while the Music tab is open)
 function Lyr-Sync {
+  if (-not [bool]$cfg.lyrOn) { return }   # lyrics are folded away: nothing is downloaded
   if (-not ($ui.expanded -and (-not $ui.closing) -and $ui.tab -eq 'music')) { return }
   $now = Now-Ms
   $st = $sync.State
@@ -2076,6 +2078,7 @@ function Lyr-Activate([int]$new) {
 }
 function Lyr-Tick {
   $L = $ui.lyr
+  if (-not [bool]$cfg.lyrOn) { return }
   if ((-not $L.synced) -or $L.n -lt 1 -or (-not $L.times)) { return }
   if (-not ($ui.expanded -and $ui.tab -eq 'music')) { return }
   $p = [double]$ui.lastPos + 0.3
@@ -2095,7 +2098,7 @@ function Music-Resume {
   } catch {}
   try {
     $L = $ui.lyr
-    if ($L.n -gt 0) {
+    if ($L.n -gt 0 -and [bool]$cfg.lyrOn) {
       try { $E.lyrHost.UpdateLayout() } catch {}
       $L.userUntil = 0.0
       if ($L.synced -and $L.times) {
@@ -2108,6 +2111,64 @@ function Music-Resume {
     }
   } catch { Log "music resume: $($_.Exception.Message)" }
 }
+# ============================================================
+#  Lyrics on / off. The "Текст" button folds the lyrics away: the card fades out, the player glides to the middle and
+#  the music goes on without text (while the text is off nothing is downloaded). The choice is remembered (cfg.lyrOn).
+# ============================================================
+function Lyr-Shift {
+  $w = 0.0
+  try { $w = [double]$E.mMusic.ActualWidth } catch {}
+  if ($w -gt 300.0) { return (($w - 286.0) / 2.0) }
+  return 161.0
+}
+function Lyr-Btn-Look([bool]$on, [bool]$anim) {
+  $bgC = $(if ($on) { [System.Windows.Media.Color]::FromArgb(0x3C, 255, 255, 255) } else { [System.Windows.Media.Color]::FromArgb(0x18, 255, 255, 255) })
+  $fgC = $(if ($on) { [System.Windows.Media.Color]::FromRgb(255, 255, 255) } else { [System.Windows.Media.Color]::FromArgb(0xA0, 255, 255, 255) })
+  $cprop = [System.Windows.Media.SolidColorBrush]::ColorProperty
+  $pairs = @(@($E.btnLyr.Background, $bgC), @($E.lyrIco.Stroke, $fgC), @($E.lyrBtnTxt.Foreground, $fgC))
+  foreach ($pr in $pairs) {
+    if ($anim -and (-not $ui.reduceMotion)) { Anim-Color $pr[0] $pr[1] 260 }
+    else { $pr[0].BeginAnimation($cprop, $null); $pr[0].Color = $pr[1] }
+  }
+}
+function Lyr-Layout([bool]$on, [bool]$anim) {
+  $xprop = [System.Windows.Media.TranslateTransform]::XProperty
+  $ct = $E.lyrCard.RenderTransform
+  $pt = $E.mPlayer.RenderTransform
+  $ptTo = 0.0; $ctTo = 0.0; $opTo = 1.0
+  if (-not $on) { $ptTo = (Lyr-Shift); $ctTo = 40.0; $opTo = 0.0 }
+  if ($anim -and (-not $ui.reduceMotion)) {
+    if ($on) { $E.lyrCard.Visibility = 'Visible' }
+    Anim-To $pt $xprop $ptTo 560
+    Anim-To $ct $xprop $ctTo 480
+    FadeTo $E.lyrCard $opTo $(if ($on) { 380 } else { 260 })
+    if (-not $on) { Later 560 { if (-not [bool]$cfg.lyrOn) { $E.lyrCard.Visibility = 'Hidden' } } }
+  } else {
+    $pt.BeginAnimation($xprop, $null); $pt.X = $ptTo
+    $ct.BeginAnimation($xprop, $null); $ct.X = $ctTo
+    Set-Op $E.lyrCard $opTo
+    $E.lyrCard.Visibility = $(if ($on) { 'Visible' } else { 'Hidden' })
+  }
+}
+function Lyr-Init {
+  # own (not frozen) brushes, so that the colours can glide
+  $E.btnLyr.Background = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromArgb(0x3C, 255, 255, 255))
+  $E.lyrIco.Stroke = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromRgb(255, 255, 255))
+  $E.lyrBtnTxt.Foreground = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromRgb(255, 255, 255))
+  $on = [bool]$cfg.lyrOn
+  Lyr-Btn-Look $on $false
+  Lyr-Layout $on $false
+}
+function Lyr-Toggle {
+  $on = (-not [bool]$cfg.lyrOn)
+  $cfg.lyrOn = $on
+  Request-Save
+  Lyr-Btn-Look $on $true
+  Lyr-Layout $on $true
+  if ($on) { Lyr-Sync; Music-Resume }
+}
+$E.btnLyr.Add_Click({ try { Lyr-Toggle } catch { Log "lyrics toggle: $($_.Exception.Message)" } })
+
 $E.lyrView.Add_MouseWheel({
   param($snd, $ev)
   $L = $ui.lyr
@@ -4122,11 +4183,12 @@ $window.Show()
 Reposition
 Apply-Geo
 Update-Glass
+try { Lyr-Init } catch { Log "lyrics init: $($_.Exception.Message)" }
 $ui.sizeKey = 'idle'; $ui.mode = 'idle'
 Set-Compact 'idle'
 Retarget 0.62 0.72      # soft pop when the island appears
 $timerDt.Start(); $poll.Start(); $keep.Start()
-Log "running v2.5: scale=$($ui.scale) win=($($ui.winX),$($ui.winY)) glassOn=$($ui.glassOn)"
+Log "running v2.6: scale=$($ui.scale) win=($($ui.winX),$($ui.winY)) glassOn=$($ui.glassOn)"
 [void]$app.Run()
 
 try { $sync.Running = $false } catch {}
