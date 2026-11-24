@@ -28,7 +28,7 @@ function Get-ClipboardTextSafe {
           if ($p -ne [IntPtr]::Zero) {
             $s = [Runtime.InteropServices.Marshal]::PtrToStringUni($p)
             $null = [Win32.Clip]::GlobalUnlock($h)
-            if ($s -and $s.Length -gt 600) { $s = $s.Substring(0, 600) }
+            if ($s -and $s.Length -gt 20000) { $s = $s.Substring(0, 20000) }
             return $s
           }
         }
@@ -48,14 +48,15 @@ $null = [Windows.Storage.Streams.IRandomAccessStreamWithContentType, Windows.Sto
 
 $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() |
   Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
-function Await($op, $t) {
+function Await($op, $t, [int]$ms = 4000) {
   $task = $asTaskGeneric.MakeGenericMethod($t).Invoke($null, @($op))
-  $task.Wait(-1) | Out-Null
+  # never wait forever: a hung player must not freeze the media session AND the clipboard history
+  if (-not $task.Wait($ms)) { throw 'WinRT call timed out' }
   $task.Result
 }
 $mgr = $null
 try {
-  $mgr = Await ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType = WindowsRuntime]::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
+  $mgr = Await ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType = WindowsRuntime]::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]) 30000
 } catch { $mgr = $null; WLog "SMTC manager unavailable: $($_.Exception.Message)" }
 
 # ---------- album art ----------
@@ -70,6 +71,8 @@ function Get-ThumbBytes($props) {
     $null = Await ($dr.LoadAsync($size)) ([System.UInt32])
     $bytes = New-Object byte[] $size
     $dr.ReadBytes($bytes)
+    try { $dr.Dispose() } catch {}
+    try { $ras.Dispose() } catch {}
     return ,$bytes
   } catch { return $null }
 }
