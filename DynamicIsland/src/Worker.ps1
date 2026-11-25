@@ -172,7 +172,7 @@ try {
 $clipHist = New-Object 'System.Collections.Generic.List[string]'
 $lastClip = ''
 $lastSeq = [uint32]0
-$wlp = 0.0; $wlpAt = 0; $wTitle = ''; $wfrz = $false; $wfrzAt = 0.0; $pPrev = -1.0
+$wlp = 0.0; $wlpAt = 0; $wTitle = ''; $wfrz = $false; $wfrzAt = 0.0; $pPrev = -1.0; $pMoved = $false
 $artCache = @{}
 $artFail = @{}
 $artPending = @{}
@@ -276,15 +276,22 @@ while ($sync.Running) {
               # own clock and only resync when the player really refreshed its timeline.
               $isPlaying = ($status -eq 'Playing' -or $status -eq 'Buffering')
               if ($wlpAt -eq 0 -or $st.title -ne $wTitle) {
-                $wlp = $p; $wlpAt = $nowMs; $wfrz = $false
-              } elseif (-not $isPlaying) {
-                if (-not $wfrz) { $wfrz = $true; $wfrzAt = $wlp + ($nowMs - $wlpAt) / 1000.0 }
-              } elseif ($wfrz) {
-                $wfrz = $false
-                if ([Math]::Abs($p - $wfrzAt) -gt 2.0) { $wlp = $p } else { $wlp = $wfrzAt }
-                $wlpAt = $nowMs
-              } elseif ($p -ne $pPrev -or [Math]::Abs($p - ($wlp + ($nowMs - $wlpAt) / 1000.0)) -gt 30.0) {
-                $wlp = $p; $wlpAt = $nowMs
+                $wlp = $p; $wlpAt = $nowMs; $wfrz = $false; $pMoved = $false
+                try { WLog ("track: src=" + [string]$s.SourceAppUserModelId + " pos=" + [string]$p + " end=" + [string]$st.len + " upd=" + $tl.LastUpdatedTime.ToLocalTime().ToString('HH:mm:ss')) } catch {}
+              } else {
+                # some players (web players, a few desktop ones) never refresh their timeline: the position they hand out
+                # stays at the value it had when the track started. That value says nothing about the song, so it must
+                # NOT pull our clock back (it used to reset the progress and the lyrics to 0:00 after 30 s, and on pause/resume).
+                if ($p -ne $pPrev) { $pMoved = $true }
+                if (-not $isPlaying) {
+                  if (-not $wfrz) { $wfrz = $true; $wfrzAt = $wlp + ($nowMs - $wlpAt) / 1000.0 }
+                } elseif ($wfrz) {
+                  $wfrz = $false
+                  if ($pMoved -and [Math]::Abs($p - $wfrzAt) -gt 2.0) { $wlp = $p } else { $wlp = $wfrzAt }
+                  $wlpAt = $nowMs
+                } elseif ($p -ne $pPrev) {
+                  $wlp = $p; $wlpAt = $nowMs
+                }
               }
               $pPrev = $p
               $wTitle = $st.title
