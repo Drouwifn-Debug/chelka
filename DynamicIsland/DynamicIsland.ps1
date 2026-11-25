@@ -1,5 +1,5 @@
 ﻿# ============================================================
-#  Dynamic Island for Windows  v2.6.2 (PowerShell 5.1 + WPF, no dependencies)
+#  Dynamic Island for Windows  v2.6.3 (PowerShell 5.1 + WPF, no dependencies)
 #  Liquid Glass pill: blurred snapshot of the screen behind it, clipped to the
 #  pill shape, spring morphing, music + lyrics / to-do + calendar / weather /
 #  system load / sound mixer / clipboard / sites / file shelf / timer + pomodoro.
@@ -26,7 +26,7 @@ trap {
   if ($Console) { Write-Host "Нажми Enter, чтобы закрыть..."; [void](Read-Host) }
   exit 1
 }
-Log "=== start v2.6.2  PS $($PSVersionTable.PSVersion)  dir=$ScriptDir"
+Log "=== start v2.6.3  PS $($PSVersionTable.PSVersion)  dir=$ScriptDir"
 
 # ---- single instance ----
 $script:mutex = New-Object System.Threading.Mutex($false, 'Global\DynamicIslandPS_v2')
@@ -1906,6 +1906,11 @@ $ui.lyrSeq = 0; $ui.lyrPend = ''; $ui.lyrPendAt = 0.0; $ui.lyrGapAt = 0.0; $ui.l
 $ui.lyrCache = @{}
 $script:lyrT = $E.lyrHost.RenderTransform
 
+$script:lyrShadow = New-Object System.Windows.Media.Effects.DropShadowEffect
+$script:lyrShadow.Color = [System.Windows.Media.Colors]::Black
+$script:lyrShadow.BlurRadius = 7.0; $script:lyrShadow.ShadowDepth = 1.0; $script:lyrShadow.Direction = 270.0; $script:lyrShadow.Opacity = 0.4
+$script:lyrShadow.Freeze()
+
 function Lyr-Show([string]$msg) {
   $E.lyrMsg.Text = $msg
   FadeTo $E.lyrEmpty 1.0 240
@@ -1992,7 +1997,7 @@ function Lyr-Build($res) {
     if ($synced) {
       $tb.FontSize = 18.5; $tb.FontWeight = [System.Windows.FontWeights]::SemiBold
       $tb.Margin = [System.Windows.Thickness]::new(0, 0, 0, 16)
-      $tb.Opacity = 0.36
+      $tb.Opacity = 0.42
       $tb.RenderTransformOrigin = [System.Windows.Point]::new(0.0, 0.5)
       $tb.RenderTransform = New-Object System.Windows.Media.ScaleTransform (0.9, 0.9)
     } else {
@@ -2061,9 +2066,11 @@ function Lyr-Activate([int]$new) {
   $syP = [System.Windows.Media.ScaleTransform]::ScaleYProperty
   for ($i = $lo; $i -le $hi; $i++) {
     $d = $(if ($new -lt 0) { 9 } else { [Math]::Abs($i - $new) })
-    $op = 0.36; if ($d -eq 0) { $op = 1.0 } elseif ($d -eq 1) { $op = 0.62 } elseif ($d -eq 2) { $op = 0.46 }
+    $op = 0.42; if ($d -eq 0) { $op = 1.0 } elseif ($d -eq 1) { $op = 0.72 } elseif ($d -eq 2) { $op = 0.55 }
     $sc = $(if ($d -eq 0) { 1.0 } else { 0.9 })
     $tb = $L.lines[$i]
+    # the lines around the current one get a soft shadow, so the white text stays clear on a light glass
+    $tb.Effect = $(if ($d -le 2) { $script:lyrShadow } else { $null })
     if ($old -eq -2 -or $ui.reduceMotion) {
       $tb.BeginAnimation($opP, $null); $tb.Opacity = $op
       $tb.RenderTransform.BeginAnimation($sxP, $null); $tb.RenderTransform.BeginAnimation($syP, $null)
@@ -4196,7 +4203,7 @@ $ui.sizeKey = 'idle'; $ui.mode = 'idle'
 Set-Compact 'idle'
 Retarget 0.62 0.72      # soft pop when the island appears
 $timerDt.Start(); $poll.Start(); $keep.Start()
-Log "running v2.6.2: scale=$($ui.scale) win=($($ui.winX),$($ui.winY)) glassOn=$($ui.glassOn)"
+Log "running v2.6.3: scale=$($ui.scale) win=($($ui.winX),$($ui.winY)) glassOn=$($ui.glassOn)"
 [void]$app.Run()
 
 try { $sync.Running = $false } catch {}

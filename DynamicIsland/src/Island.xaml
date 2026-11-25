@@ -634,7 +634,7 @@
           </StackPanel>
 
           <!-- lyrics -->
-          <Border Grid.Column="2" x:Name="lyrCard" CornerRadius="26" Background="#33000000" BorderBrush="#18FFFFFF" BorderThickness="1" ClipToBounds="True">
+          <Border Grid.Column="2" x:Name="lyrCard" CornerRadius="26" Background="#10FFFFFF" BorderBrush="#16FFFFFF" BorderThickness="1" ClipToBounds="True">
             <Border.RenderTransform><TranslateTransform X="0"/></Border.RenderTransform>
             <Grid>
               <Canvas x:Name="lyrView" ClipToBounds="True" Background="Transparent">
