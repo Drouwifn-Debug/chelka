@@ -1,5 +1,5 @@
 ﻿# ============================================================
-#  Dynamic Island for Windows  v2.6.1 (PowerShell 5.1 + WPF, no dependencies)
+#  Dynamic Island for Windows  v2.6.2 (PowerShell 5.1 + WPF, no dependencies)
 #  Liquid Glass pill: blurred snapshot of the screen behind it, clipped to the
 #  pill shape, spring morphing, music + lyrics / to-do + calendar / weather /
 #  system load / sound mixer / clipboard / sites / file shelf / timer + pomodoro.
@@ -26,7 +26,7 @@ trap {
   if ($Console) { Write-Host "Нажми Enter, чтобы закрыть..."; [void](Read-Host) }
   exit 1
 }
-Log "=== start v2.6.1  PS $($PSVersionTable.PSVersion)  dir=$ScriptDir"
+Log "=== start v2.6.2  PS $($PSVersionTable.PSVersion)  dir=$ScriptDir"
 
 # ---- single instance ----
 $script:mutex = New-Object System.Threading.Mutex($false, 'Global\DynamicIslandPS_v2')
@@ -1992,13 +1992,13 @@ function Lyr-Build($res) {
     if ($synced) {
       $tb.FontSize = 18.5; $tb.FontWeight = [System.Windows.FontWeights]::SemiBold
       $tb.Margin = [System.Windows.Thickness]::new(0, 0, 0, 16)
-      $tb.Opacity = 0.24
+      $tb.Opacity = 0.36
       $tb.RenderTransformOrigin = [System.Windows.Point]::new(0.0, 0.5)
       $tb.RenderTransform = New-Object System.Windows.Media.ScaleTransform (0.9, 0.9)
     } else {
       $tb.FontSize = 14.5
       $tb.Margin = [System.Windows.Thickness]::new(0, 0, 0, $(if (([string]$s).Trim()) { 6 } else { 12 }))
-      $tb.Opacity = 0.88
+      $tb.Opacity = 0.95
     }
     [void]$lh.Children.Add($tb)
     [void]$lines.Add($tb)
@@ -2061,7 +2061,7 @@ function Lyr-Activate([int]$new) {
   $syP = [System.Windows.Media.ScaleTransform]::ScaleYProperty
   for ($i = $lo; $i -le $hi; $i++) {
     $d = $(if ($new -lt 0) { 9 } else { [Math]::Abs($i - $new) })
-    $op = 0.24; if ($d -eq 0) { $op = 1.0 } elseif ($d -eq 1) { $op = 0.52 } elseif ($d -eq 2) { $op = 0.36 }
+    $op = 0.36; if ($d -eq 0) { $op = 1.0 } elseif ($d -eq 1) { $op = 0.62 } elseif ($d -eq 2) { $op = 0.46 }
     $sc = $(if ($d -eq 0) { 1.0 } else { 0.9 })
     $tb = $L.lines[$i]
     if ($old -eq -2 -or $ui.reduceMotion) {
@@ -2115,6 +2115,7 @@ function Music-Resume {
 #  Lyrics on / off. The "Текст" button folds the lyrics away: the card fades out, the player glides to the middle and
 #  the music goes on without text (while the text is off nothing is downloaded). The choice is remembered (cfg.lyrOn).
 # ============================================================
+$script:LYR_GROW = 1.1   # the player grows a little when the lyrics are folded away
 function Lyr-Shift {
   $w = 0.0
   try { $w = [double]$E.mMusic.ActualWidth } catch {}
@@ -2134,17 +2135,24 @@ function Lyr-Btn-Look([bool]$on, [bool]$anim) {
 function Lyr-Layout([bool]$on, [bool]$anim) {
   $xprop = [System.Windows.Media.TranslateTransform]::XProperty
   $ct = $E.lyrCard.RenderTransform
-  $pt = $E.mPlayer.RenderTransform
-  $ptTo = 0.0; $ctTo = 0.0; $opTo = 1.0
-  if (-not $on) { $ptTo = (Lyr-Shift); $ctTo = 40.0; $opTo = 0.0 }
+  $pg = $E.mPlayer.RenderTransform
+  $pscl = $pg.Children[0]; $pt = $pg.Children[1]
+  $sxprop = [System.Windows.Media.ScaleTransform]::ScaleXProperty
+  $syprop = [System.Windows.Media.ScaleTransform]::ScaleYProperty
+  $ptTo = 0.0; $ctTo = 0.0; $opTo = 1.0; $sclTo = 1.0
+  if (-not $on) { $ptTo = (Lyr-Shift); $ctTo = 40.0; $opTo = 0.0; $sclTo = [double]$script:LYR_GROW }
   if ($anim -and (-not $ui.reduceMotion)) {
     if ($on) { $E.lyrCard.Visibility = 'Visible' }
     Anim-To $pt $xprop $ptTo 560
+    Anim-To $pscl $sxprop $sclTo 600
+    Anim-To $pscl $syprop $sclTo 600
     Anim-To $ct $xprop $ctTo 480
     FadeTo $E.lyrCard $opTo $(if ($on) { 380 } else { 260 })
     if (-not $on) { Later 560 { if (-not [bool]$cfg.lyrOn) { $E.lyrCard.Visibility = 'Hidden' } } }
   } else {
     $pt.BeginAnimation($xprop, $null); $pt.X = $ptTo
+    $pscl.BeginAnimation($sxprop, $null); $pscl.BeginAnimation($syprop, $null)
+    $pscl.ScaleX = $sclTo; $pscl.ScaleY = $sclTo
     $ct.BeginAnimation($xprop, $null); $ct.X = $ctTo
     Set-Op $E.lyrCard $opTo
     $E.lyrCard.Visibility = $(if ($on) { 'Visible' } else { 'Hidden' })
@@ -4188,7 +4196,7 @@ $ui.sizeKey = 'idle'; $ui.mode = 'idle'
 Set-Compact 'idle'
 Retarget 0.62 0.72      # soft pop when the island appears
 $timerDt.Start(); $poll.Start(); $keep.Start()
-Log "running v2.6.1: scale=$($ui.scale) win=($($ui.winX),$($ui.winY)) glassOn=$($ui.glassOn)"
+Log "running v2.6.2: scale=$($ui.scale) win=($($ui.winX),$($ui.winY)) glassOn=$($ui.glassOn)"
 [void]$app.Run()
 
 try { $sync.Running = $false } catch {}
