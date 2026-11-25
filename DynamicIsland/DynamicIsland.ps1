@@ -1,5 +1,5 @@
 ﻿# ============================================================
-#  Dynamic Island for Windows  v2.6   (PowerShell 5.1 + WPF, no dependencies)
+#  Dynamic Island for Windows  v2.6.1 (PowerShell 5.1 + WPF, no dependencies)
 #  Liquid Glass pill: blurred snapshot of the screen behind it, clipped to the
 #  pill shape, spring morphing, music + lyrics / to-do + calendar / weather /
 #  system load / sound mixer / clipboard / sites / file shelf / timer + pomodoro.
@@ -26,7 +26,7 @@ trap {
   if ($Console) { Write-Host "Нажми Enter, чтобы закрыть..."; [void](Read-Host) }
   exit 1
 }
-Log "=== start v2.6  PS $($PSVersionTable.PSVersion)  dir=$ScriptDir"
+Log "=== start v2.6.1  PS $($PSVersionTable.PSVersion)  dir=$ScriptDir"
 
 # ---- single instance ----
 $script:mutex = New-Object System.Threading.Mutex($false, 'Global\DynamicIslandPS_v2')
@@ -4188,7 +4188,7 @@ $ui.sizeKey = 'idle'; $ui.mode = 'idle'
 Set-Compact 'idle'
 Retarget 0.62 0.72      # soft pop when the island appears
 $timerDt.Start(); $poll.Start(); $keep.Start()
-Log "running v2.6: scale=$($ui.scale) win=($($ui.winX),$($ui.winY)) glassOn=$($ui.glassOn)"
+Log "running v2.6.1: scale=$($ui.scale) win=($($ui.winX),$($ui.winY)) glassOn=$($ui.glassOn)"
 [void]$app.Run()
 
 try { $sync.Running = $false } catch {}
