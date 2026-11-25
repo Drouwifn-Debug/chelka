@@ -550,8 +550,8 @@
           <Grid.RenderTransform><TranslateTransform Y="0"/></Grid.RenderTransform>
 
           <Grid.ColumnDefinitions><ColumnDefinition Width="286"/><ColumnDefinition Width="18"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-          <StackPanel x:Name="mPlayer" Grid.Column="0" HorizontalAlignment="Center" VerticalAlignment="Center" Width="286">
-            <StackPanel.RenderTransform><TranslateTransform X="0"/></StackPanel.RenderTransform>
+          <StackPanel x:Name="mPlayer" Grid.Column="0" HorizontalAlignment="Center" VerticalAlignment="Center" Width="286" RenderTransformOrigin="0.5,0.5">
+            <StackPanel.RenderTransform><TransformGroup><ScaleTransform ScaleX="1" ScaleY="1"/><TranslateTransform X="0"/></TransformGroup></StackPanel.RenderTransform>
             <Border Width="176" Height="176" CornerRadius="28" HorizontalAlignment="Center" Background="#22FFFFFF">
               <Border.Effect><DropShadowEffect BlurRadius="24" ShadowDepth="7" Direction="270" Opacity="0.45"/></Border.Effect>
               <Grid>
@@ -634,7 +634,7 @@
           </StackPanel>
 
           <!-- lyrics -->
-          <Border Grid.Column="2" x:Name="lyrCard" CornerRadius="26" Background="#10FFFFFF" BorderBrush="#16FFFFFF" BorderThickness="1" ClipToBounds="True">
+          <Border Grid.Column="2" x:Name="lyrCard" CornerRadius="26" Background="#33000000" BorderBrush="#18FFFFFF" BorderThickness="1" ClipToBounds="True">
             <Border.RenderTransform><TranslateTransform X="0"/></Border.RenderTransform>
             <Grid>
               <Canvas x:Name="lyrView" ClipToBounds="True" Background="Transparent">
