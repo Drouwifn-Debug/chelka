@@ -530,31 +530,67 @@ function Clean-Notes([string]$b) {
   return $t
 }
 
-# the newest published release of the repository: version, notes, archive address, checksum
+# the newest published version of the repository: a GitHub release (has a checksum and nice notes) or a plain tag vX.Y.Z
+# (what a simple "git push" of a tag gives); the higher of the two wins
+function Tag-Version([string]$name) {
+  $v = $name -replace '^[vV]', ''
+  if ($v -match '^\d+(\.\d+){1,3}$') { return $v }
+  return ''
+}
+function Http-Status($ex) {
+  $st = 0
+  try { $st = [int]$ex.Response.StatusCode } catch {}
+  return $st
+}
 function Check-Update($req) {
   $repo = [string]$sync.UpdRepo
-  $rel = $null
-  try { $rel = Get-Json ('https://api.github.com/repos/' + $repo + '/releases/latest') 12000 }
+  $api = 'https://api.github.com/repos/' + $repo
+  $limited = $false; $failed = ''
+  $rel = $null; $relVer = ''
+  try { $rel = Get-Json ($api + '/releases/latest') 12000 }
   catch [System.Net.WebException] {
-    $st = 0
-    try { $st = [int]$_.Exception.Response.StatusCode } catch {}
-    if ($st -eq 404) { return @{ seq = $req.seq; op = 'check'; ok = $true; none = $true } }
-    if ($st -eq 403 -or $st -eq 429) { throw 'GitHub временно ограничил запросы, попробуй позже' }
-    throw
+    $st = Http-Status $_.Exception
+    if ($st -eq 403 -or $st -eq 429) { $limited = $true }
+    elseif ($st -ne 404) { $failed = [string]$_.Exception.Message }
   }
-  $ver = ([string]$rel.tag_name) -replace '^[vV]', ''
-  if ($ver -notmatch '^\d+(\.\d+){1,3}$') { throw ('неверный номер версии в релизе: ' + [string]$rel.tag_name) }
-  $url = ''; $size = 0L
-  foreach ($a in @($rel.assets)) {
-    if ($a -and ([string]$a.name) -match '(?i)^DynamicIsland.*\.zip$') { $url = [string]$a.browser_download_url; $size = [long]$a.size; break }
+  if ($rel) { $relVer = Tag-Version ([string]$rel.tag_name) }
+  $bestVer = ''; $bestTag = ''
+  try {
+    foreach ($t in @(Get-Json ($api + '/tags?per_page=50') 12000)) {
+      $v = Tag-Version ([string]$t.name)
+      if ((-not $v)) { continue }
+      if ((-not $bestVer) -or ([version]$v -gt [version]$bestVer)) { $bestVer = $v; $bestTag = [string]$t.name }
+    }
+  } catch [System.Net.WebException] {
+    $st = Http-Status $_.Exception
+    if ($st -eq 403 -or $st -eq 429) { $limited = $true }
+    elseif ($st -ne 404 -and (-not $failed)) { $failed = [string]$_.Exception.Message }
   }
-  if (-not $url) { $url = [string]$rel.zipball_url }
-  if (-not $url) { throw 'в релизе нет архива' }
-  $body = [string]$rel.body
-  $sha = ''
-  $m = [regex]::Match($body, '(?im)^\s*sha-?256\s*[:=]\s*([0-9a-f]{64})')
-  if ($m.Success) { $sha = $m.Groups[1].Value.ToLower() }
-  return @{ seq = $req.seq; op = 'check'; ok = $true; none = $false; ver = $ver; tag = [string]$rel.tag_name; url = $url; size = $size; sha = $sha; notes = (Clean-Notes $body); page = [string]$rel.html_url }
+  if ((-not $relVer) -and (-not $bestVer)) {
+    if ($limited) { throw 'GitHub временно ограничил запросы, попробуй позже' }
+    if ($failed) { throw $failed }
+    return @{ seq = $req.seq; op = 'check'; ok = $true; none = $true }
+  }
+  if ($relVer -and ((-not $bestVer) -or ([version]$relVer -ge [version]$bestVer))) {
+    $url = ''; $size = 0L
+    foreach ($a in @($rel.assets)) {
+      if ($a -and ([string]$a.name) -match '(?i)^DynamicIsland.*\.zip$') { $url = [string]$a.browser_download_url; $size = [long]$a.size; break }
+    }
+    if (-not $url) { $url = 'https://github.com/' + $repo + '/archive/refs/tags/' + [string]$rel.tag_name + '.zip' }
+    $body = [string]$rel.body
+    $sha = ''
+    $m = [regex]::Match($body, '(?im)^\s*sha-?256\s*[:=]\s*([0-9a-f]{64})')
+    if ($m.Success -and $url -match '(?i)DynamicIsland[^/]*\.zip$') { $sha = $m.Groups[1].Value.ToLower() }
+    return @{ seq = $req.seq; op = 'check'; ok = $true; none = $false; ver = $relVer; tag = [string]$rel.tag_name; url = $url; size = $size; sha = $sha; notes = (Clean-Notes $body); page = [string]$rel.html_url }
+  }
+  # a tag (newer than the last release, or there is no release at all): the notes are the tag message
+  $notes = ''
+  try {
+    $ref = Get-Json ($api + '/git/ref/tags/' + $bestTag) 12000
+    $o = Get-Json ([string]$ref.object.url) 12000
+    $notes = Clean-Notes ([string]$o.message)
+  } catch { NLog "update notes: $($_.Exception.Message)" }
+  return @{ seq = $req.seq; op = 'check'; ok = $true; none = $false; ver = $bestVer; tag = $bestTag; url = ('https://github.com/' + $repo + '/archive/refs/tags/' + $bestTag + '.zip'); size = 0L; sha = ''; notes = $notes; page = ('https://github.com/' + $repo + '/releases/tag/' + $bestTag) }
 }
 
 # download the archive to %TEMP% (progress goes to $sync.UpdProg), return its path and SHA-256
@@ -583,6 +619,7 @@ function Download-Update($req) {
         $done += $n
         if ($done -gt 30MB) { throw 'архив слишком большой' }
         if ($total -gt 0) { $sync.UpdProg = [Math]::Min(0.99, $done / [double]$total) }
+        else { $sync.UpdProg = [Math]::Min(0.95, 1.0 - [Math]::Exp(-$done / 300000.0)) }   # size unknown: a soft guess
       }
     } finally { $out.Dispose(); $inp.Dispose() }
   } finally { $resp.Close() }
