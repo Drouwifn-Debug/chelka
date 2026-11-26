@@ -1,5 +1,5 @@
 ﻿# ============================================================
-#  Dynamic Island for Windows  v2.6.3 (PowerShell 5.1 + WPF, no dependencies)
+#  Dynamic Island for Windows  v2.7.0 (PowerShell 5.1 + WPF, no dependencies)
 #  Liquid Glass pill: blurred snapshot of the screen behind it, clipped to the
 #  pill shape, spring morphing, music + lyrics / to-do + calendar / weather /
 #  system load / sound mixer / clipboard / sites / file shelf / timer + pomodoro.
@@ -9,6 +9,8 @@ param([switch]$Console)
 $ErrorActionPreference = 'Stop'
 $ScriptDir = $PSScriptRoot
 if (-not $ScriptDir) { $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
+$AppVersion = '2.7.0'
+$UpdRepo = 'Drouwifn-Debug/chelka'
 $DataDir = Join-Path $env:LOCALAPPDATA 'DynamicIsland'
 [void](New-Item -ItemType Directory -Force -Path $DataDir)
 $LogFile = Join-Path $DataDir 'island.log'
@@ -26,7 +28,7 @@ trap {
   if ($Console) { Write-Host "Нажми Enter, чтобы закрыть..."; [void](Read-Host) }
   exit 1
 }
-Log "=== start v2.6.3  PS $($PSVersionTable.PSVersion)  dir=$ScriptDir"
+Log "=== start v$AppVersion  PS $($PSVersionTable.PSVersion)  dir=$ScriptDir"
 
 # ---- single instance ----
 $script:mutex = New-Object System.Threading.Mutex($false, 'Global\DynamicIslandPS_v2')
@@ -44,6 +46,8 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Xaml
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 # ============================================================
 #  Settings  (%LOCALAPPDATA%\DynamicIsland\settings.json)
@@ -53,7 +57,7 @@ $cfg = @{
   accent = '242,242,242'; eq = $true; charge = $true; glass = $true; glassAlpha = 55
   hideFull = $true; hoverClock = $true; city = ''; favicons = $true
   theme = 'auto'; hotkey = 'Ctrl+Alt+I'; icsUrl = ''
-  pillMusic = 'title'; pillIdle = 'hover'; shotDir = ''; lyrOn = $true
+  pillMusic = 'title'; pillIdle = 'hover'; shotDir = ''; lyrOn = $true; updAuto = $true; updSkip = ''
   cities = @(); cityIdx = -1; pins = @(); shelf = @(); todos = @(); events = @()
   sites = @(
     @{ n = 'YouTube'; u = 'https://www.youtube.com' }
@@ -111,6 +115,8 @@ function Load-Settings {
   if (@('hover', 'clock', 'date') -notcontains $cfg.pillIdle) { $cfg.pillIdle = 'hover' }
   $cfg.shotDir = [string]$cfg.shotDir
   $cfg.lyrOn = [bool]$cfg.lyrOn
+  $cfg.updAuto = [bool]$cfg.updAuto
+  $cfg.updSkip = [string]$cfg.updSkip
 }
 function Save-Settings {
   try { ($cfg | ConvertTo-Json -Depth 6) | Set-Content -Path $SetFile -Encoding UTF8 }
@@ -134,6 +140,7 @@ $sync = [hashtable]::Synchronized(@{
   SysOn = $false; Sys = $null
   WxReq = $null; WxRes = [hashtable]::Synchronized(@{}); CityQ = $null; CityRes = $null
   LyrReq = $null; Lyr = $null; IcsReq = $null; Ics = $null
+  UpdReq = $null; UpdRes = $null; UpdProg = 0.0; UpdRepo = $UpdRepo
   Log = (New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]')
 })
 $workerText = [IO.File]::ReadAllText((Join-Path $ScriptDir 'src\Worker.ps1'), [Text.Encoding]::UTF8)
@@ -150,7 +157,7 @@ $null = $workerPs.BeginInvoke()
 $netText = ''
 try { $netText = [IO.File]::ReadAllText((Join-Path $ScriptDir 'src\Net.ps1'), [Text.Encoding]::UTF8) } catch { Log "net script: $($_.Exception.Message)" }
 $script:netPool = @()
-foreach ($netRole in @('lyr', 'wx', 'city')) {
+foreach ($netRole in @('lyr', 'wx', 'city', 'upd')) {
   try {
     $nrs = [runspacefactory]::CreateRunspace()
     $nrs.Open()
@@ -995,6 +1002,7 @@ function Finish-Collapse {
   $ui.bdReady = $false
   Set-Op $E.BdCanvas 0.0
   Close-SiteAdd $true
+  try { Upd-Hide } catch {}
   Set-SitesEdit $false
   $ui.closing = $false
   $ui.expanded = $false
@@ -1141,11 +1149,23 @@ $script:miAuto.CheckOnClick = $false
 $script:miAuto.Add_Click({ Set-Autostart (-not (Get-Autostart)) })
 $miLog = New-Object System.Windows.Forms.ToolStripMenuItem 'Открыть папку с логами'
 $miLog.Add_Click({ try { Start-Process explorer.exe $DataDir } catch {} })
+$miUpd = New-Object System.Windows.Forms.ToolStripMenuItem 'Проверить обновления'
+$script:miUpdAuto = New-Object System.Windows.Forms.ToolStripMenuItem 'Проверять обновления сам'
+$script:miUpdAuto.CheckOnClick = $false
+$script:miUpdAuto.Checked = [bool]$cfg.updAuto
+$script:miUpdAuto.Add_Click({
+  $cfg.updAuto = -not [bool]$cfg.updAuto
+  $script:miUpdAuto.Checked = [bool]$cfg.updAuto
+  if ($cfg.updAuto) { $ui.updNext = (Now-Ms) + 4000.0 } else { $ui.updNext = 0.0 }
+  Request-Save
+})
 $miExit = New-Object System.Windows.Forms.ToolStripMenuItem 'Выход'
 $miExit.Add_Click({ Quit-App })
 [void]$cms.Items.Add($miToggle)
 [void]$cms.Items.Add($script:miAuto)
 [void]$cms.Items.Add($miLog)
+[void]$cms.Items.Add($miUpd)
+[void]$cms.Items.Add($script:miUpdAuto)
 [void]$cms.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 [void]$cms.Items.Add($miExit)
 $script:ni.ContextMenuStrip = $cms
@@ -4176,6 +4196,7 @@ function Poll-Tick {
     }
   }
   try { Ics-Tick } catch { $ui.tabErr++; if ($ui.tabErr -lt 8) { Log ("ics: " + $_.Exception.Message) } }
+  try { Upd-Tick } catch { $ui.tabErr++; if ($ui.tabErr -lt 8) { Log ("upd: " + $_.Exception.Message) } }
   try { Update-IdleText } catch { }
 }
 
@@ -4191,6 +4212,424 @@ $poll.Add_Tick({
 })
 
 # ============================================================
+#  Updates. The island looks at the newest GitHub release, asks, downloads it, checks the files, keeps a copy of the
+#  old version, installs it (into the current or a chosen folder) and restarts itself. The network part is src\Net.ps1
+#  (role 'upd'); nothing is downloaded or changed without the "Обновить" click.
+# ============================================================
+$ui.upd = @{
+  state = 'idle'      # idle | checking | uptodate | avail | downloading | installing | done | error
+  seq = 0; busy = $false; manual = $false; none = $false
+  avail = $null; err = ''; checked = ''
+  folder = $ScriptDir; pkg = ''; restartDir = ''
+  resRef = $null; notified = @{}; wasExp = $false; frac = -1.0
+}
+$ui.updPrompt = $false
+$ui.updOpen = $false
+$ui.updNext = 0.0
+$UPD_BAR_W = 394.0
+$script:updCloseTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:updCloseTimer.Interval = [TimeSpan]::FromMilliseconds(170)
+$script:updCloseTimer.Add_Tick({
+  $script:updCloseTimer.Stop()
+  if (-not $ui.updOpen) { $E.updDlg.Visibility = 'Collapsed' }
+})
+
+function Upd-Newer([string]$a, [string]$b) {
+  try { return ([version]$a -gt [version]$b) } catch { return $false }
+}
+function Upd-Short([string]$p, [int]$n) {
+  if ($p.Length -le $n) { return $p }
+  return ('…' + $p.Substring($p.Length - $n + 1))
+}
+
+# the button in the "Ещё" tab
+function Upd-RowRender {
+  $u = $ui.upd
+  $b = 'Обновления'
+  $hot = $false
+  if ($u.state -eq 'checking') { $b = 'Проверяю…' }
+  elseif ($u.state -eq 'avail' -and $u.avail) { $b = 'Обновить'; $hot = $true }
+  $E.btnUpdCheck.Content = $b
+  if ($hot) { $E.btnUpdCheck.Background = (New-Br '#F2F2F2'); $E.btnUpdCheck.Foreground = (New-Br '#101014') }
+  else { $E.btnUpdCheck.Background = (New-Br '#22FFFFFF'); $E.btnUpdCheck.Foreground = (New-Br '#FFFFFF') }
+}
+
+# the dialog follows the state
+function Upd-Render {
+  $u = $ui.upd
+  $st = [string]$u.state
+  $title = 'Обновление'; $sub = ''; $notes = ''; $msg = ''
+  $showFolder = $false; $showBar = $false; $skip = $false
+  $go = ''; $later = ''
+  $to = ''
+  if ($u.avail) { $to = '  →  ' + [string]$u.avail.ver }
+  if ($st -eq 'checking') { $title = 'Проверяю обновления…'; $sub = 'Сейчас: ' + $AppVersion; $later = 'Закрыть' }
+  elseif ($st -eq 'uptodate') {
+    $title = 'У тебя последняя версия'
+    $sub = $AppVersion
+    if ($u.checked) { $sub = $AppVersion + ' · проверено в ' + [string]$u.checked }
+    if ($u.none) { $msg = 'На GitHub пока нет опубликованных релизов.' }
+    $go = 'Проверить снова'; $later = 'Закрыть'
+  } elseif ($st -eq 'avail' -and $u.avail) {
+    $title = 'Доступно обновление'
+    $sub = $AppVersion + $to
+    $notes = [string]$u.avail.notes
+    $showFolder = $true
+    $go = 'Обновить'; $later = 'Позже'; $skip = $true
+  } elseif ($st -eq 'downloading') { $title = 'Скачиваю…'; $sub = $AppVersion + $to; $showBar = $true }
+  elseif ($st -eq 'installing') { $title = 'Устанавливаю…'; $sub = $AppVersion + $to; $showBar = $true }
+  elseif ($st -eq 'done') { $title = 'Готово'; $sub = 'Перезапускаюсь…'; $showBar = $true }
+  elseif ($st -eq 'error') {
+    $title = 'Не получилось'
+    $sub = $AppVersion + $to
+    $msg = [string]$u.err
+    if ($u.avail) { $showFolder = $true }
+    $go = 'Повторить'; $later = 'Закрыть'
+  }
+  $E.updTitle.Text = $title
+  $E.updVer.Text = $sub
+  $E.updNotes.Text = $notes
+  $E.updNotesHost.Visibility = $(if ($notes.Length -gt 0) { 'Visible' } else { 'Collapsed' })
+  $E.updFolder.Text = (Upd-Short ([string]$u.folder) 46)
+  $E.updFolderRow.Visibility = $(if ($showFolder) { 'Visible' } else { 'Collapsed' })
+  $E.updBarHost.Visibility = $(if ($showBar) { 'Visible' } else { 'Collapsed' })
+  $E.updMsg.Text = $msg
+  $E.updMsg.Foreground = $(if ($st -eq 'error') { (New-Br '#FF7A70') } else { (New-Br '#B3FFFFFF') })
+  $E.updMsg.Visibility = $(if ($msg.Length -gt 0) { 'Visible' } else { 'Collapsed' })
+  $E.btnUpdGo.Visibility = $(if ($go) { 'Visible' } else { 'Collapsed' })
+  if ($go) { $E.btnUpdGo.Content = $go }
+  $E.btnUpdLater.Visibility = $(if ($later) { 'Visible' } else { 'Collapsed' })
+  if ($later) { $E.btnUpdLater.Content = $later }
+  $E.btnUpdSkip.Visibility = $(if ($skip) { 'Visible' } else { 'Collapsed' })
+  $E.updBtns.Visibility = $(if ($go -or $later) { 'Visible' } else { 'Collapsed' })
+}
+function Upd-Progress([double]$f) {
+  $u = $ui.upd
+  if ($f -lt 0.0) { $f = 0.0 }
+  if ($f -gt 1.0) { $f = 1.0 }
+  if ([Math]::Abs($f - [double]$u.frac) -lt 0.01 -and $f -lt 1.0) { return }
+  $u.frac = $f
+  Anim-To $E.updBarFill ([System.Windows.FrameworkElement]::WidthProperty) ($UPD_BAR_W * $f) 220
+}
+
+function Upd-Open {
+  if (-not $ui.expanded) { return }
+  $u = $ui.upd
+  $st = [string]$u.state
+  if ($u.busy -and $st -eq 'idle') { $u.state = 'checking'; $u.manual = $true; $st = 'checking' }   # a quiet check is already running
+  elseif ((-not $u.busy) -and ($st -eq 'idle' -or $st -eq 'uptodate' -or ($st -eq 'error' -and (-not $u.avail)))) { Upd-Check $true; $st = [string]$u.state }
+  Upd-Render
+  if ($ui.updOpen) { return }
+  $ui.updOpen = $true
+  $script:updCloseTimer.Stop()
+  $E.updDlg.Visibility = 'Visible'
+  Set-Op $E.updDlg 0.0
+  FadeTo $E.updDlg 1.0 200
+  $cs = $E.updCard.RenderTransform.Children[0]
+  $cs.BeginAnimation([System.Windows.Media.ScaleTransform]::ScaleXProperty, $null); $cs.ScaleX = 0.94
+  $cs.BeginAnimation([System.Windows.Media.ScaleTransform]::ScaleYProperty, $null); $cs.ScaleY = 0.94
+  Anim-To $cs ([System.Windows.Media.ScaleTransform]::ScaleXProperty) 1.0 320 $script:easeBack
+  Anim-To $cs ([System.Windows.Media.ScaleTransform]::ScaleYProperty) 1.0 320 $script:easeBack
+  if ($st -eq 'downloading' -or $st -eq 'installing') { $u.frac = -1.0; Upd-Progress $(if ($st -eq 'installing') { 1.0 } else { [double]$sync.UpdProg }) }
+}
+function Upd-Close([bool]$instant = $false) {
+  if (-not $ui.updOpen) { return }
+  $ui.updOpen = $false
+  $ui.updPrompt = $false
+  if ($instant) { Set-Op $E.updDlg 0.0; $E.updDlg.Visibility = 'Collapsed' }
+  else { FadeTo $E.updDlg 0.0 150; $script:updCloseTimer.Stop(); $script:updCloseTimer.Start() }
+}
+function Upd-Hide { if ($ui.updOpen) { Upd-Close $true } }
+
+function Upd-Check([bool]$manual) {
+  $u = $ui.upd
+  if ($u.busy) { return }
+  $u.seq = [int]$u.seq + 1
+  $u.busy = $true; $u.manual = $manual
+  if ($manual) { $u.state = 'checking'; $u.err = ''; Upd-Render; Upd-RowRender }
+  $sync.UpdReq = @{ seq = $u.seq; op = 'check' }
+}
+function Upd-Fail([string]$msg) {
+  $u = $ui.upd
+  $u.busy = $false
+  $u.state = 'error'; $u.err = $msg
+  Log "update error: $msg"
+  Upd-Render; Upd-RowRender
+}
+function Upd-Start {
+  $u = $ui.upd
+  if ($u.busy -or (-not $u.avail)) { return }
+  $u.state = 'downloading'; $u.err = ''
+  $u.seq = [int]$u.seq + 1
+  $u.busy = $true
+  $u.frac = -1.0
+  $sync.UpdProg = 0.0
+  Upd-Render; Upd-Progress 0.0; Upd-RowRender
+  $sync.UpdReq = @{ seq = $u.seq; op = 'download'; url = [string]$u.avail.url; size = [long]$u.avail.size; name = ('pkg-' + [string]$u.avail.ver + '.zip') }
+}
+
+function Upd-OnResult($res) {
+  $u = $ui.upd
+  if ([string]$res.op -ne 'download') { $u.busy = $false }   # during a download / install the island stays busy
+  if ([string]$res.op -eq 'download') {
+    if (-not $res.ok) { Upd-Fail ([string]$res.err); return }
+    if ($u.avail -and [string]$u.avail.sha -and ([string]$res.sha) -ne ([string]$u.avail.sha)) {
+      Upd-Fail 'Контрольная сумма архива не совпала: скачалось с ошибкой, попробуй ещё раз'; return
+    }
+    $u.pkg = [string]$res.path
+    $u.state = 'installing'
+    Upd-Render; Upd-Progress 1.0; Upd-RowRender
+    Later 350 { Upd-Install }
+    return
+  }
+  # answer to a check
+  $u.checked = (Get-Date).ToString('HH:mm')
+  if (-not $res.ok) {
+    Log ('update check: ' + [string]$res.err)
+    if ($u.manual) { Upd-Fail ([string]$res.err) }
+    return
+  }
+  $u.none = [bool]$res.none
+  $ver = [string]$res.ver
+  if ($res.none -or (-not (Upd-Newer $ver $AppVersion))) {
+    $u.avail = $null
+    $st = [string]$u.state
+    if ($st -eq 'idle' -or $st -eq 'checking' -or $st -eq 'uptodate' -or $st -eq 'error' -or $st -eq 'avail') { $u.state = 'uptodate' }
+    Upd-Render; Upd-RowRender
+    return
+  }
+  if ((-not $u.manual) -and $ver -eq [string]$cfg.updSkip) {
+    $u.state = 'uptodate'; Upd-RowRender
+    return
+  }
+  $u.avail = $res
+  $u.state = 'avail'
+  Log "update available: $ver"
+  Upd-Render; Upd-RowRender
+  if ((-not $u.manual) -and (-not $u.notified[$ver])) {
+    $u.notified[$ver] = $true
+    $ui.updPrompt = $true
+    if (-not $ui.expanded) { Notify-Event ('Доступно обновление ' + $ver) $false }
+  }
+}
+
+function Upd-Tick {
+  $u = $ui.upd
+  $res = $sync.UpdRes
+  if ($res -and [int]$res.seq -eq [int]$u.seq -and (-not [object]::ReferenceEquals($res, $u.resRef))) {
+    $u.resRef = $res
+    Upd-OnResult $res
+  }
+  if ($u.state -eq 'downloading' -and $ui.updOpen) { Upd-Progress ([double]$sync.UpdProg) }
+  # automatic check: 30 s after the start, then every 6 hours
+  if ([bool]$cfg.updAuto -and $ui.updNext -gt 0 -and (Now-Ms) -ge $ui.updNext -and (-not $u.busy)) {
+    $ui.updNext = (Now-Ms) + 21600000.0
+    Upd-Check $false
+  }
+  # the dialog opens when the panel is opened (after the pill said "Доступно обновление", or from the tray menu)
+  if ($ui.expanded -and (-not $ui.closing)) {
+    if (-not $u.wasExp) {
+      $u.wasExp = $true
+      if ($ui.updPrompt -or $u.state -eq 'downloading' -or $u.state -eq 'installing') { $ui.updPrompt = $false; Upd-Open }
+    }
+  } else { $u.wasExp = $false }
+}
+
+# ---- folder: the island steps aside (it is always on top and would hide the dialog), the folder dialog opens, the island comes back
+function Upd-PickFolder {
+  $u = $ui.upd
+  if ($u.busy -or $u.state -eq 'installing' -or $u.state -eq 'downloading') { return }
+  $ui.updPrompt = $false
+  Collapse
+  Later 420 {
+    $u2 = $ui.upd
+    $picked = ''
+    $prevFg = [IntPtr]::Zero
+    try {
+      try { $prevFg = [DI.Native]::Foreground() } catch {}
+      [DI.Native]::SetNoActivate($mainHwnd, $false)
+      try { [void]$window.Activate() } catch {}
+      $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+      $dlg.Description = 'Куда установить Dynamic Island? Если в выбранной папке ещё нет острова, внутри неё появится папка DynamicIsland.'
+      $dlg.ShowNewFolderButton = $true
+      try { if (Test-Path -LiteralPath ([string]$u2.folder)) { $dlg.SelectedPath = [string]$u2.folder } } catch {}
+      if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $picked = [string]$dlg.SelectedPath }
+      $dlg.Dispose()
+    } catch { Log "folder dialog: $($_.Exception.Message)" }
+    finally {
+      try {
+        $wasMine = ([DI.Native]::Foreground() -eq $mainHwnd)
+        [DI.Native]::SetNoActivate($mainHwnd, $true)
+        if ($wasMine -and $prevFg -ne [IntPtr]::Zero) { [DI.Native]::Foreground($prevFg) }
+      } catch {}
+    }
+    if ($picked) { $u2.folder = $picked }
+    $ui.updPrompt = $true
+    $script:updReopen = 0
+    Upd-Reopen
+  }
+}
+# the island may still be closing when the folder dialog ends: try again a few times
+function Upd-Reopen {
+  if ($ui.expanded) { return }
+  if ($ui.closing -and $script:updReopen -lt 12) { $script:updReopen++; Later 160 { Upd-Reopen }; return }
+  Expand
+}
+
+# ---- installing
+function Upd-Unzip([string]$zip, [string]$dest) {
+  if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force -ErrorAction SilentlyContinue }
+  [void](New-Item -ItemType Directory -Force -Path $dest)
+  $rootDir = [IO.Path]::GetFullPath($dest).TrimEnd('\') + '\'
+  $za = [IO.Compression.ZipFile]::OpenRead($zip)
+  try {
+    foreach ($en in $za.Entries) {
+      $nm = ([string]$en.FullName) -replace '/', '\'
+      if ((-not $nm) -or $nm.EndsWith('\')) { continue }
+      $full = [IO.Path]::GetFullPath((Join-Path $dest $nm))
+      if (-not $full.StartsWith($rootDir, [StringComparison]::OrdinalIgnoreCase)) { throw "в архиве недопустимый путь: $nm" }
+      $dd = Split-Path -Parent $full
+      if (-not (Test-Path -LiteralPath $dd)) { [void](New-Item -ItemType Directory -Force -Path $dd) }
+      [IO.Compression.ZipFileExtensions]::ExtractToFile($en, $full, $true)
+    }
+  } finally { $za.Dispose() }
+}
+function Upd-SyntaxOk([string]$file) {
+  $tokens = $null; $errs = $null
+  [void][System.Management.Automation.Language.Parser]::ParseFile($file, [ref]$tokens, [ref]$errs)
+  return ((-not $errs) -or $errs.Count -eq 0)
+}
+function Upd-CopyTree([string]$from, [string]$to) {
+  $fromFull = [IO.Path]::GetFullPath($from).TrimEnd('\')
+  foreach ($f in @(Get-ChildItem -LiteralPath $from -Recurse -File)) {
+    $rel = $f.FullName.Substring($fromFull.Length).TrimStart('\')
+    $dst = Join-Path $to $rel
+    $dd = Split-Path -Parent $dst
+    if (-not (Test-Path -LiteralPath $dd)) { [void](New-Item -ItemType Directory -Force -Path $dd) }
+    Copy-Item -LiteralPath $f.FullName -Destination $dst -Force
+  }
+}
+function Upd-Backup {
+  $root = Join-Path $DataDir 'backup'
+  $bk = Join-Path $root ($AppVersion + '_' + (Get-Date -Format 'yyyyMMdd_HHmmss'))
+  [void](New-Item -ItemType Directory -Force -Path $bk)
+  foreach ($f in @(Get-ChildItem -LiteralPath $ScriptDir -File -ErrorAction SilentlyContinue)) { Copy-Item -LiteralPath $f.FullName -Destination $bk -Force }
+  $sd = Join-Path $ScriptDir 'src'
+  if (Test-Path -LiteralPath $sd) { Copy-Item -LiteralPath $sd -Destination (Join-Path $bk 'src') -Recurse -Force }
+  try { Get-ChildItem -LiteralPath $root -Directory | Sort-Object Name -Descending | Select-Object -Skip 3 | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+  return $bk
+}
+# where the files go: the current folder, or the chosen one (inside a new "DynamicIsland" folder if the chosen one is not empty)
+function Upd-Target {
+  $f = [string]$ui.upd.folder
+  if (-not $f) { return $ScriptDir }
+  if ([IO.Path]::GetFullPath($f).TrimEnd('\') -ieq [IO.Path]::GetFullPath($ScriptDir).TrimEnd('\')) { return $ScriptDir }
+  if (Test-Path -LiteralPath (Join-Path $f 'DynamicIsland.ps1')) { return $f }
+  $nonEmpty = $false
+  try { if (Test-Path -LiteralPath $f) { $nonEmpty = (@(Get-ChildItem -LiteralPath $f -Force -ErrorAction SilentlyContinue).Count -gt 0) } } catch {}
+  if ($nonEmpty) { return (Join-Path $f 'DynamicIsland') }
+  return $f
+}
+function Upd-Install {
+  $u = $ui.upd
+  $bk = ''; $touched = $false
+  try {
+    $ver = [string]$u.avail.ver
+    $stage = Join-Path ([IO.Path]::GetTempPath()) ('DynamicIsland-update\stage-' + $ver)
+    Upd-Unzip ([string]$u.pkg) $stage
+    $main = Get-ChildItem -LiteralPath $stage -Recurse -Filter 'DynamicIsland.ps1' -File |
+      Where-Object { Test-Path -LiteralPath (Join-Path $_.DirectoryName 'src\Island.xaml') } |
+      Sort-Object { $_.FullName.Length } | Select-Object -First 1
+    if (-not $main) { throw 'в архиве не нашёл файлы острова' }
+    $src = $main.DirectoryName
+    foreach ($rel in @('DynamicIsland.ps1', 'Dynamic Island.vbs', 'src\Island.xaml', 'src\Native.cs', 'src\Net.ps1', 'src\Worker.ps1', 'src\Sys.ps1')) {
+      if (-not (Test-Path -LiteralPath (Join-Path $src $rel))) { throw "в архиве нет файла $rel" }
+    }
+    foreach ($rel in @('DynamicIsland.ps1', 'src\Net.ps1', 'src\Worker.ps1', 'src\Sys.ps1')) {
+      if (-not (Upd-SyntaxOk (Join-Path $src $rel))) { throw "в файле $rel ошибка, не устанавливаю" }
+    }
+    $xd = New-Object System.Xml.XmlDocument
+    $xd.LoadXml([IO.File]::ReadAllText((Join-Path $src 'src\Island.xaml'), [Text.Encoding]::UTF8))
+    $mt = [IO.File]::ReadAllText((Join-Path $src 'DynamicIsland.ps1'), [Text.Encoding]::UTF8)
+    $mm = [regex]::Match($mt, '(?m)^\$AppVersion\s*=\s*''([0-9.]+)''')
+    if ((-not $mm.Success) -or $mm.Groups[1].Value -ne $ver) { throw 'версия внутри архива не совпадает с версией релиза' }
+    $target = Upd-Target
+    if (-not (Test-Path -LiteralPath $target)) { [void](New-Item -ItemType Directory -Force -Path $target) }
+    $probe = Join-Path $target ('.write-test-' + [Guid]::NewGuid().ToString('N'))
+    try { [IO.File]::WriteAllText($probe, 'x'); Remove-Item -LiteralPath $probe -Force }
+    catch { throw 'в эту папку нельзя записывать, выбери другую (кнопка «Изменить…»)' }
+    $inPlace = ([IO.Path]::GetFullPath($target).TrimEnd('\') -ieq [IO.Path]::GetFullPath($ScriptDir).TrimEnd('\'))
+    if ($inPlace) { $bk = Upd-Backup; Log "update: backup $bk" }
+    $touched = $true
+    Upd-CopyTree $src $target
+    foreach ($rel in @('DynamicIsland.ps1', 'src\Net.ps1', 'src\Worker.ps1', 'src\Sys.ps1')) {
+      if (-not (Upd-SyntaxOk (Join-Path $target $rel))) { throw "после копирования файл $rel повреждён" }
+    }
+    if (Get-Autostart) { Set-ItemProperty -Path $RunKey -Name 'DynamicIsland' -Value ('wscript.exe "' + (Join-Path $target 'Dynamic Island.vbs') + '"') }
+    $u.restartDir = $target
+    $u.state = 'done'
+    Upd-Render; Upd-Progress 1.0
+    Log "update installed: $ver -> $target"
+    try { Remove-Item -LiteralPath (Join-Path ([IO.Path]::GetTempPath()) 'DynamicIsland-update') -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+    Later 1400 { Upd-Restart }
+  } catch {
+    $m = $_.Exception.Message
+    Log "update failed: $m"
+    if ($touched -and $bk) {
+      try { Upd-CopyTree $bk $ScriptDir; Log 'update rolled back' } catch { Log "rollback failed: $($_.Exception.Message)" }
+    }
+    Upd-Fail $m
+  }
+}
+# a hidden helper waits until this process is gone and starts the launcher of the (new) version, then the island quits
+function Upd-Restart {
+  $dir = [string]$ui.upd.restartDir
+  if (-not $dir) { $dir = $ScriptDir }
+  $vbs = Join-Path $dir 'Dynamic Island.vbs'
+  try {
+    $q = $vbs.Replace("'", "''")
+    $cmd = @"
+try { Wait-Process -Id $PID -Timeout 25 -ErrorAction SilentlyContinue } catch {}
+Start-Sleep -Milliseconds 700
+Start-Process -FilePath 'wscript.exe' -ArgumentList ('"' + '$q' + '"')
+"@
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
+    Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $enc)
+  } catch { Log "restart helper: $($_.Exception.Message)" }
+  Quit-App
+}
+
+# ---- buttons
+$E.btnUpdCheck.Add_Click({ try { Upd-Open } catch { Log "update open: $($_.Exception.Message)" } })
+$E.btnUpdGo.Add_Click({
+  try {
+    $st = [string]$ui.upd.state
+    if ($st -eq 'avail' -or ($st -eq 'error' -and $ui.upd.avail)) { Upd-Start } else { Upd-Check $true }
+  } catch { Log "update go: $($_.Exception.Message)" }
+})
+$E.btnUpdLater.Add_Click({ Upd-Close })
+$E.btnUpdSkip.Add_Click({
+  try {
+    if ($ui.upd.avail) { $cfg.updSkip = [string]$ui.upd.avail.ver; Request-Save }
+    $ui.upd.state = 'uptodate'; $ui.upd.avail = $null
+    Upd-RowRender
+    Upd-Close
+  } catch { Log "update skip: $($_.Exception.Message)" }
+})
+$E.btnUpdFolder.Add_Click({ try { Upd-PickFolder } catch { Log "update folder: $($_.Exception.Message)" } })
+$E.updDlg.Add_MouseLeftButtonDown({
+  param($snd, $ev)
+  if ([object]::ReferenceEquals($ev.OriginalSource, $snd)) {
+    $s = [string]$ui.upd.state
+    if ($s -ne 'downloading' -and $s -ne 'installing' -and $s -ne 'done') { Upd-Close }
+  }
+})
+$miUpd.Add_Click({ $ui.updPrompt = $true; if ($ui.expanded) { Upd-Open } else { Expand } })
+
+Upd-RowRender
+if ([bool]$cfg.updAuto) { $ui.updNext = (Now-Ms) + 30000.0 }
+
+# ============================================================
 #  Go
 # ============================================================
 $window.Add_Closed({ Quit-App })
@@ -4203,7 +4642,7 @@ $ui.sizeKey = 'idle'; $ui.mode = 'idle'
 Set-Compact 'idle'
 Retarget 0.62 0.72      # soft pop when the island appears
 $timerDt.Start(); $poll.Start(); $keep.Start()
-Log "running v2.6.3: scale=$($ui.scale) win=($($ui.winX),$($ui.winY)) glassOn=$($ui.glassOn)"
+Log "running v${AppVersion}: scale=$($ui.scale) win=($($ui.winX),$($ui.winY)) glassOn=$($ui.glassOn)"
 [void]$app.Run()
 
 try { $sync.Running = $false } catch {}

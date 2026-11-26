@@ -1213,7 +1213,10 @@
                 <Button x:Name="btnPomo" Style="{StaticResource PillBtn}" Content="Начать фокус" Background="#F2F2F2" Foreground="#101014" HorizontalAlignment="Left" Margin="0" Padding="16,7"/>
               </StackPanel>
             </Border>
-            <Button x:Name="btnQuit" Grid.Row="2" Style="{StaticResource PillBtn}" Content="Выключить островок" Background="#4DFF453A" Foreground="#FFB4AB" HorizontalAlignment="Left" Margin="0,12,0,0" Padding="16,8"/>
+            <Grid Grid.Row="2" Margin="0,12,0,0">
+              <Button x:Name="btnQuit" Style="{StaticResource PillBtn}" Content="Выключить островок" Background="#4DFF453A" Foreground="#FFB4AB" HorizontalAlignment="Left" Margin="0" Padding="16,8"/>
+              <Button x:Name="btnUpdCheck" Style="{StaticResource PillBtn}" Content="Обновления" HorizontalAlignment="Right" Margin="0" Padding="14,8"/>
+            </Grid>
           </Grid>
           <Grid Grid.Column="2">
             <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
@@ -1284,6 +1287,42 @@
                 <Button x:Name="btnSiteOk" Style="{StaticResource PillBtn}" Content="Добавить" Background="#F2F2F2" Foreground="#101014"/>
                 <Button x:Name="btnSitePaste" Style="{StaticResource PillBtn}" Content="Из буфера"/>
                 <Button x:Name="btnSiteCancel" Style="{StaticResource PillBtn}" Content="Отмена" Margin="0"/>
+              </StackPanel>
+            </StackPanel>
+          </Border>
+        </Grid>
+
+        <!-- update dialog: same dimming as the add-site dialog -->
+        <Grid x:Name="updDlg" Visibility="Collapsed" Opacity="0">
+          <Grid.Background>
+            <RadialGradientBrush Center="0.5,0.5" GradientOrigin="0.5,0.5" RadiusX="0.75" RadiusY="0.75">
+              <GradientStop Color="#78060608" Offset="0"/>
+              <GradientStop Color="#B4060608" Offset="1"/>
+            </RadialGradientBrush>
+          </Grid.Background>
+          <Border x:Name="updCard" Width="440" CornerRadius="22" Background="#F2161619" BorderBrush="#2AFFFFFF" BorderThickness="1" Padding="22,18,22,20" HorizontalAlignment="Center" VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5">
+            <Border.RenderTransform><TransformGroup><ScaleTransform ScaleX="0.94" ScaleY="0.94"/><TranslateTransform X="0"/></TransformGroup></Border.RenderTransform>
+            <StackPanel>
+              <TextBlock x:Name="updTitle" Text="Обновление" Foreground="White" FontSize="16" FontWeight="SemiBold"/>
+              <TextBlock x:Name="updVer" Text="" Style="{StaticResource CardTxt}" FontSize="12" Margin="0,3,0,10"/>
+              <ScrollViewer x:Name="updNotesHost" MaxHeight="128" VerticalScrollBarVisibility="Hidden" Margin="0,0,0,10" Visibility="Collapsed">
+                <TextBlock x:Name="updNotes" Text="" Foreground="#D2FFFFFF" FontSize="12.5" TextWrapping="Wrap"/>
+              </ScrollViewer>
+              <Grid x:Name="updFolderRow" Margin="0,0,0,12" Visibility="Collapsed">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <TextBlock Text="Папка" Style="{StaticResource CardTxt}" FontSize="12" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                <TextBlock x:Name="updFolder" Grid.Column="1" Text="" Foreground="#E6FFFFFF" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                <Button x:Name="btnUpdFolder" Grid.Column="2" Style="{StaticResource PillBtn}" Content="Изменить…" FontSize="10.5" Padding="12,4" Margin="8,0,0,0"/>
+              </Grid>
+              <Grid x:Name="updBarHost" Height="6" Margin="0,2,0,12" Visibility="Collapsed">
+                <Border CornerRadius="3" Background="#26FFFFFF"/>
+                <Border x:Name="updBarFill" CornerRadius="3" Background="#F2F2F2" HorizontalAlignment="Left" Width="0"/>
+              </Grid>
+              <TextBlock x:Name="updMsg" Text="" Foreground="#FF7A70" FontSize="11.5" TextWrapping="Wrap" Margin="0,0,0,10" Visibility="Collapsed"/>
+              <StackPanel x:Name="updBtns" Orientation="Horizontal">
+                <Button x:Name="btnUpdGo" Style="{StaticResource PillBtn}" Content="Обновить" Background="#F2F2F2" Foreground="#101014"/>
+                <Button x:Name="btnUpdLater" Style="{StaticResource PillBtn}" Content="Позже"/>
+                <Button x:Name="btnUpdSkip" Style="{StaticResource PillBtn}" Content="Пропустить версию" Margin="0"/>
               </StackPanel>
             </StackPanel>
           </Border>
