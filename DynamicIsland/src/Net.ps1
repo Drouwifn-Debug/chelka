@@ -5,7 +5,7 @@
 # ============================================================
 $ErrorActionPreference = 'Continue'
 $inv = [Globalization.CultureInfo]::InvariantCulture
-# this script runs in three runspaces: 'lyr' (song lyrics), 'wx' (weather + calendar), 'city' (city search),
+# this script runs in four runspaces: 'lyr' (song lyrics), 'wx' (weather + calendar), 'city' (city search), 'upd' (updates),
 # so a slow request of one kind never delays the others
 if (-not $role) { $role = 'all' }
 function NLog($m) { try { $sync.Log.Enqueue("net: $m") } catch {} }
@@ -13,7 +13,7 @@ function NLog($m) { try { $sync.Log.Enqueue("net: $m") } catch {} }
 function Get-Text([string]$url, [int]$timeoutMs = 9000) {
   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
   $req = [Net.HttpWebRequest]::Create($url)
-  $req.UserAgent = 'DynamicIsland/2.6 (desktop widget)'
+  $req.UserAgent = 'DynamicIsland/2.7 (desktop widget)'
   $req.Timeout = $timeoutMs
   $req.ReadWriteTimeout = $timeoutMs
   $req.AutomaticDecompression = [Net.DecompressionMethods]::GZip -bor [Net.DecompressionMethods]::Deflate
@@ -517,8 +517,86 @@ function Get-Ics([string]$url) {
   return @($out | Sort-Object { $_.t } | Select-Object -First 300)
 }
 
+# ---------------------------------------------------------------- updates (GitHub releases)
+function Clean-Notes([string]$b) {
+  $t = ([string]$b) -replace "`r", ''
+  $t = [regex]::Replace($t, '(?im)^\s*sha-?256\s*[:=].*$', '')
+  $t = [regex]::Replace($t, '(?m)^\s*#+\s*', '')
+  $t = [regex]::Replace($t, '\[([^\]]+)\]\([^)]*\)', '$1')
+  $t = [regex]::Replace($t, '(?m)^\s*[-*]\s+', '• ')
+  $t = [regex]::Replace($t, '[*`]+', '')
+  $t = [regex]::Replace($t, '\n{3,}', "`n`n").Trim()
+  if ($t.Length -gt 700) { $t = $t.Substring(0, 700).TrimEnd() + '…' }
+  return $t
+}
+
+# the newest published release of the repository: version, notes, archive address, checksum
+function Check-Update($req) {
+  $repo = [string]$sync.UpdRepo
+  $rel = $null
+  try { $rel = Get-Json ('https://api.github.com/repos/' + $repo + '/releases/latest') 12000 }
+  catch [System.Net.WebException] {
+    $st = 0
+    try { $st = [int]$_.Exception.Response.StatusCode } catch {}
+    if ($st -eq 404) { return @{ seq = $req.seq; op = 'check'; ok = $true; none = $true } }
+    if ($st -eq 403 -or $st -eq 429) { throw 'GitHub временно ограничил запросы, попробуй позже' }
+    throw
+  }
+  $ver = ([string]$rel.tag_name) -replace '^[vV]', ''
+  if ($ver -notmatch '^\d+(\.\d+){1,3}$') { throw ('неверный номер версии в релизе: ' + [string]$rel.tag_name) }
+  $url = ''; $size = 0L
+  foreach ($a in @($rel.assets)) {
+    if ($a -and ([string]$a.name) -match '(?i)^DynamicIsland.*\.zip$') { $url = [string]$a.browser_download_url; $size = [long]$a.size; break }
+  }
+  if (-not $url) { $url = [string]$rel.zipball_url }
+  if (-not $url) { throw 'в релизе нет архива' }
+  $body = [string]$rel.body
+  $sha = ''
+  $m = [regex]::Match($body, '(?im)^\s*sha-?256\s*[:=]\s*([0-9a-f]{64})')
+  if ($m.Success) { $sha = $m.Groups[1].Value.ToLower() }
+  return @{ seq = $req.seq; op = 'check'; ok = $true; none = $false; ver = $ver; tag = [string]$rel.tag_name; url = $url; size = $size; sha = $sha; notes = (Clean-Notes $body); page = [string]$rel.html_url }
+}
+
+# download the archive to %TEMP% (progress goes to $sync.UpdProg), return its path and SHA-256
+function Download-Update($req) {
+  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+  $dir = Join-Path ([IO.Path]::GetTempPath()) 'DynamicIsland-update'
+  [void][IO.Directory]::CreateDirectory($dir)
+  $dest = Join-Path $dir ([IO.Path]::GetFileName([string]$req.name))
+  $sync.UpdProg = 0.0
+  $r = [Net.HttpWebRequest]::Create([string]$req.url)
+  $r.UserAgent = 'DynamicIsland/2.7 (updater)'
+  $r.Timeout = 20000
+  $r.ReadWriteTimeout = 20000
+  $resp = $r.GetResponse()
+  try {
+    $total = [long]$resp.ContentLength
+    if ($total -le 0) { $total = [long]$req.size }
+    if ($total -gt 30MB) { throw 'архив слишком большой' }
+    $inp = $resp.GetResponseStream()
+    $out = [IO.File]::Create($dest)
+    try {
+      $buf = New-Object byte[] 32768
+      $done = 0L
+      while (($n = $inp.Read($buf, 0, $buf.Length)) -gt 0) {
+        $out.Write($buf, 0, $n)
+        $done += $n
+        if ($done -gt 30MB) { throw 'архив слишком большой' }
+        if ($total -gt 0) { $sync.UpdProg = [Math]::Min(0.99, $done / [double]$total) }
+      }
+    } finally { $out.Dispose(); $inp.Dispose() }
+  } finally { $resp.Close() }
+  $sha = [Security.Cryptography.SHA256]::Create()
+  $fs = [IO.File]::OpenRead($dest)
+  $hex = ''
+  try { $hex = ([BitConverter]::ToString($sha.ComputeHash($fs)) -replace '-', '').ToLower() }
+  finally { $fs.Dispose(); $sha.Dispose() }
+  $sync.UpdProg = 1.0
+  return @{ seq = $req.seq; op = 'download'; ok = $true; path = $dest; sha = $hex }
+}
+
 # ---------------------------------------------------------------- main loop
-$lastCity = -1; $lastLyr = -1; $lastWx = -1; $lastIcs = -1
+$lastCity = -1; $lastLyr = -1; $lastWx = -1; $lastIcs = -1; $lastUpd = -1
 NLog "started ($role)"
 while ($sync.Running) {
   $busy = $false
@@ -551,6 +629,17 @@ while ($sync.Running) {
     $lastIcs = [int]$ir.seq; $busy = $true
     try { $sync.Ics = @{ seq = $ir.seq; ok = $true; items = @(Get-Ics ([string]$ir.url)) } }
     catch { NLog "ics: $($_.Exception.Message)"; $sync.Ics = @{ seq = $ir.seq; ok = $false; items = @() } }
+  }
+
+  $ur = $sync.UpdReq
+  if (($role -eq 'all' -or $role -eq 'upd') -and $ur -and ([int]$ur.seq -ne $lastUpd)) {
+    $lastUpd = [int]$ur.seq; $busy = $true
+    try {
+      if ([string]$ur.op -eq 'download') { $sync.UpdRes = (Download-Update $ur) } else { $sync.UpdRes = (Check-Update $ur) }
+    } catch {
+      NLog "update: $($_.Exception.Message)"
+      $sync.UpdRes = @{ seq = $ur.seq; op = [string]$ur.op; ok = $false; err = [string]$_.Exception.Message }
+    }
   }
 
   if (-not $busy) { Start-Sleep -Milliseconds 120 }
